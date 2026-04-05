@@ -64,9 +64,15 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             used_mb = key.used_bytes / BYTES_PER_MB if key.used_bytes else 0
             limit_gb = key.data_limit / BYTES_PER_GB if key.data_limit else "No Limit"
             limit_str = f"{limit_gb:.2f} GB" if isinstance(limit_gb, float) else limit_gb
-            sold_tag = "🔴 [SOLD]" if key.key_id in sold_keys else "🟢 [AVAILABLE]"
+            is_used_up = bool(key.data_limit) and (key.used_bytes or 0) >= key.data_limit
+            if is_used_up:
+                status_tag = "🟠 [USED UP]"
+            elif key.key_id in sold_keys:
+                status_tag = "🔴 [SOLD]"
+            else:
+                status_tag = "🟢 [AVAILABLE]"
             
-            msg += f"ID: `{key.key_id}` | Name: *{key.name or 'Unnamed'}* {sold_tag}\n"
+            msg += f"ID: `{key.key_id}` | Name: *{key.name or 'Unnamed'}* {status_tag}\n"
             msg += f"Usage: {used_mb:.2f} MB / {limit_str}\n"
             msg += f"Manage: `/manage {alias} {key.key_id}`\n\n"
             

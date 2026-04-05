@@ -43,10 +43,30 @@ def init_db():
                 server_alias TEXT,
                 key_id TEXT,
                 is_sold BOOLEAN DEFAULT 0,
+                used_up_notified BOOLEAN DEFAULT 0,
                 PRIMARY KEY (server_alias, key_id),
                 FOREIGN KEY (server_alias) REFERENCES servers(alias) ON DELETE CASCADE
             )
         ''')
+
+        # 4. Notification Settings Table (single-row config)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notification_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                is_enabled BOOLEAN DEFAULT 1
+            )
+        ''')
+
+        # Backward-compatible migration for older DBs missing used_up_notified.
+        cursor.execute("PRAGMA table_info(key_metadata)")
+        key_metadata_columns = {row[1] for row in cursor.fetchall()}
+        if "used_up_notified" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN used_up_notified BOOLEAN DEFAULT 0")
+
+        # Ensure settings row always exists.
+        cursor.execute(
+            "INSERT OR IGNORE INTO notification_settings (id, is_enabled) VALUES (1, 1)"
+        )
         
         conn.commit()
         logger.info("Database initialized successfully.")

@@ -3,6 +3,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from src.config import BOT_TOKEN
 from src.database.connection import init_db
+from src.services.notifier import monitor_used_up_keys
 
 # Import our handlers
 from src.handlers import owner, lists, wizards
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`, `/noti`\n"
     "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`\n"
     "- *Everyone:* `/start`, `/help`, `/id`\n\n"
     "*Quick start*\n"
@@ -21,6 +22,10 @@ HELP_TEXT = (
     "3. Admin uses `/newkey` to create keys interactively\n"
     "4. Admin uses `/keys` to inspect keys and statuses\n"
     "5. Admin uses `/manage <alias> <key_id>` to view key URL, mark sold/unsold, or delete\n\n"
+    "*Status tags in `/keys`*\n"
+    "- `🟢 [AVAILABLE]` key has remaining quota\n"
+    "- `🟠 [USED UP]` key reached data limit\n"
+    "- `🔴 [SOLD]` key is marked sold in bot metadata\n\n"
     "*Commands*\n"
     "- `/start` Show welcome message\n"
     "- `/help` Show this guide\n"
@@ -35,13 +40,27 @@ HELP_TEXT = (
     "- `/addserver <alias> <api_url> <cert_sha256>` Add Outline server (owner only)\n"
     "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
-    "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n\n"
+    "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
+    "- `/noti <on|off>` Toggle used-up key alerts to owner/admins (owner only)\n\n"
     "*Examples*\n"
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
     "- `/setkeylimit vps1 50`\n"
+    "- `/noti on`\n"
     "- `/manage vps1 7`"
 )
+
+async def post_init(application):
+    """Register periodic background jobs after application startup."""
+    if application.job_queue:
+        application.job_queue.run_repeating(
+            monitor_used_up_keys,
+            interval=300,
+            first=45,
+            name="used-up-key-notifier",
+        )
+    else:
+        logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
 
 async def start_command(update: Update, context):
     """The /start command."""
@@ -77,7 +96,7 @@ def main():
     init_db()
     
     # 2. Build the Application
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
 
     # 3. Register Basic Commands
     app.add_handler(CommandHandler("start", start_command))
@@ -92,6 +111,7 @@ def main():
     app.add_handler(CommandHandler("listserver", owner.list_server))
     app.add_handler(CommandHandler("deleteserver", owner.delete_server))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
+    app.add_handler(CommandHandler("noti", owner.set_notifications))
     
     # 5. Register List & Manage Commands
     app.add_handler(CommandHandler("keys", lists.list_servers))

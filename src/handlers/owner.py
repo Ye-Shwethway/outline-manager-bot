@@ -108,3 +108,24 @@ async def set_key_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Server `{alias}` not found.", parse_mode='Markdown')
     except ValueError:
         await update.message.reply_text("❌ Limit must be an integer.")
+
+@owner_only
+async def set_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /noti <on|off> - toggle used-up key notifications."""
+    if len(context.args) != 1:
+        status = "ON" if queries.is_notification_enabled() else "OFF"
+        await update.message.reply_text(
+            f"Usage: `/noti <on|off>`\nCurrent status: *{status}*",
+            parse_mode='Markdown',
+        )
+        return
+
+    arg = context.args[0].strip().lower()
+    if arg not in {"on", "off"}:
+        await update.message.reply_text("❌ Invalid option. Use `/noti on` or `/noti off`.", parse_mode='Markdown')
+        return
+
+    enabled = arg == "on"
+    queries.set_notification_enabled(enabled)
+    state_text = "ON" if enabled else "OFF"
+    await update.message.reply_text(f"🔔 Notifications are now *{state_text}*.", parse_mode='Markdown')
