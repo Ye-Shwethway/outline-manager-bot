@@ -5,6 +5,11 @@ from src.utils.decorators import admin_only
 from src.database import queries
 from src.services.outline_api import get_vpn_client
 from src.utils.keyboards import get_server_list_keyboard, get_key_management_keyboard
+from src.utils.inline_messages import (
+    close_active_inline_message,
+    set_active_inline_message,
+    clear_if_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +20,11 @@ async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not servers:
         await update.message.reply_text("No servers configured yet. Owner needs to use /addserver.")
         return
-    
+
+    await close_active_inline_message(update, context)
     keyboard = get_server_list_keyboard(servers, prefix="listkeys")
-    await update.message.reply_text("🌐 *Select a server to view its keys:*", reply_markup=keyboard, parse_mode='Markdown')
+    sent = await update.message.reply_text("🌐 *Select a server to view its keys:*", reply_markup=keyboard, parse_mode='Markdown')
+    set_active_inline_message(context, sent.message_id)
 
 @admin_only
 async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -31,6 +38,8 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
     
     if not client:
         await query.edit_message_text(f"❌ Could not connect to server `{alias}`.", parse_mode='Markdown')
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
         return
 
     try:
@@ -44,6 +53,8 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
         if not keys:
             msg += "No keys found on this server."
             await query.edit_message_text(msg, parse_mode='Markdown')
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
             return
 
         for key in keys:
@@ -57,9 +68,13 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             msg += f"Manage: `/manage {alias} {key.key_id}`\n\n"
             
         await query.edit_message_text(msg, parse_mode='Markdown')
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
     except Exception as e:
         logger.error(f"Error listing keys: {e}")
         await query.edit_message_text("❌ Error communicating with the Outline server.")
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
 
 @admin_only
 async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,9 +86,11 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     alias, key_id = context.args
     sold_keys = queries.get_sold_keys(alias)
     is_sold = key_id in sold_keys
-    
+
+    await close_active_inline_message(update, context)
     keyboard = get_key_management_keyboard(alias, key_id, is_sold)
-    await update.message.reply_text(f"⚙️ *Managing Key {key_id} on {alias}*", reply_markup=keyboard, parse_mode='Markdown')
+    sent = await update.message.reply_text(f"⚙️ *Managing Key {key_id} on {alias}*", reply_markup=keyboard, parse_mode='Markdown')
+    set_active_inline_message(context, sent.message_id)
 
 @admin_only
 async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,6 +111,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             f"✅ Key `{key_id}` on `{alias}` marked as *{status_text}*.",
             parse_mode='Markdown'
         )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
 
     elif action == "view":
         client = get_vpn_client(alias)
@@ -103,6 +122,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 f"❌ View action failed for key `{key_id}` on `{alias}`.",
                 parse_mode='Markdown'
             )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
             return
 
         try:
@@ -114,6 +135,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                     f"❌ Key `{key_id}` was not found on `{alias}`.",
                     parse_mode='Markdown'
                 )
+                if query.message:
+                    clear_if_matches(context, query.message.message_id)
                 return
 
             if not target_key.access_url:
@@ -122,6 +145,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                     f"❌ Access URL is unavailable for key `{key_id}` on `{alias}`.",
                     parse_mode='Markdown'
                 )
+                if query.message:
+                    clear_if_matches(context, query.message.message_id)
                 return
 
             await query.answer("Access URL sent.", show_alert=True)
@@ -134,6 +159,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 f"✅ View action finished for key `{key_id}` on `{alias}`.",
                 parse_mode='Markdown'
             )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
         except Exception as e:
             await query.answer("Failed to fetch key details.", show_alert=True)
             logger.error(f"View key error: {e}")
@@ -141,6 +168,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 f"❌ View action failed for key `{key_id}` on `{alias}`.",
                 parse_mode='Markdown'
             )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
 
     elif action == "delete":
         client = get_vpn_client(alias)
@@ -150,6 +179,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
                 parse_mode='Markdown'
             )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
             return
 
         try:
@@ -157,6 +188,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             queries.remove_key_metadata(alias, key_id)
             await query.answer("Key deleted successfully!", show_alert=True)
             await query.edit_message_text(f"🗑️ Key `{key_id}` was deleted from `{alias}`.", parse_mode='Markdown')
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
         except Exception as e:
             await query.answer("Failed to delete key.", show_alert=True)
             logger.error(f"Delete error: {e}")
@@ -164,3 +197,5 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
                 parse_mode='Markdown'
             )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)

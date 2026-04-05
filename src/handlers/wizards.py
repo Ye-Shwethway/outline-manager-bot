@@ -5,6 +5,11 @@ from src.utils.decorators import admin_only
 from src.database import queries
 from src.services.outline_api import get_vpn_client
 from src.utils.keyboards import get_server_list_keyboard
+from src.utils.inline_messages import (
+    close_active_inline_message,
+    set_active_inline_message,
+    clear_if_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +22,11 @@ async def newkey_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not servers:
         await update.message.reply_text("No servers available.")
         return ConversationHandler.END
-        
+
+    await close_active_inline_message(update, context)
     keyboard = get_server_list_keyboard(servers, prefix="newkey")
-    await update.message.reply_text("🪄 *New Key Wizard*\n\nSelect a server:", reply_markup=keyboard, parse_mode='Markdown')
+    sent = await update.message.reply_text("🪄 *New Key Wizard*\n\nSelect a server:", reply_markup=keyboard, parse_mode='Markdown')
+    set_active_inline_message(context, sent.message_id)
     return SELECT_SERVER
 
 async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -37,19 +44,27 @@ async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_T
         client = get_vpn_client(alias)
         if not client:
             await query.edit_message_text("❌ Cannot reach server to verify limits.")
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
             return ConversationHandler.END
 
         try:
             current_keys = client.get_keys()
             if len(current_keys) >= max_keys:
                 await query.edit_message_text(f"⚠️ *Limit Reached!*\n\nServer `{alias}` is capped at {max_keys} keys.", parse_mode='Markdown')
+                if query.message:
+                    clear_if_matches(context, query.message.message_id)
                 return ConversationHandler.END
         except Exception as e:
             logger.error(f"Error validating server limits for {alias}: {e}")
             await query.edit_message_text("❌ Failed to verify server key limits.")
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
             return ConversationHandler.END
 
     await query.edit_message_text(f"Server selected: `{alias}`\n\n📝 Please type a **Name** for this key:", parse_mode='Markdown')
+    if query.message:
+        clear_if_matches(context, query.message.message_id)
     return ASK_NAME
 
 async def newkey_ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
