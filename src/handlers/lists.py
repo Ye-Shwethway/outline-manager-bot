@@ -4,7 +4,11 @@ from telegram.ext import ContextTypes
 from src.utils.decorators import admin_only
 from src.database import queries
 from src.services.outline_api import get_vpn_client
-from src.utils.keyboards import get_server_list_keyboard, get_key_management_keyboard
+from src.utils.keyboards import (
+    get_server_list_keyboard,
+    get_key_management_keyboard,
+    get_delete_confirmation_keyboard,
+)
 from src.utils.inline_messages import (
     close_active_inline_message,
     set_active_inline_message,
@@ -190,6 +194,29 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 clear_if_matches(context, query.message.message_id)
 
     elif action == "delete":
+        keyboard = get_delete_confirmation_keyboard(alias, key_id)
+        await query.answer("Confirm delete to proceed.", show_alert=True)
+        await query.edit_message_text(
+            (
+                f"⚠️ *Delete Confirmation*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n\n"
+                "This action cannot be undone."
+            ),
+            reply_markup=keyboard,
+            parse_mode='Markdown',
+        )
+
+    elif action == "delno":
+        await query.answer("Delete cancelled.")
+        await query.edit_message_text(
+            f"✅ Delete cancelled for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+
+    elif action == "delyes":
         client = get_vpn_client(alias)
         if not client:
             await query.answer("Could not connect to server.", show_alert=True)

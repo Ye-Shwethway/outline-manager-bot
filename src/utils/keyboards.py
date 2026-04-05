@@ -33,3 +33,15 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+def get_delete_confirmation_keyboard(server_alias: str, key_id: str) -> InlineKeyboardMarkup:
+    """Confirmation keyboard shown before destructive delete action."""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirm Delete", callback_data=f"delyes_{server_alias}_{key_id}")
+        ],
+        [
+            InlineKeyboardButton("❎ Cancel", callback_data=f"delno_{server_alias}_{key_id}")
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
