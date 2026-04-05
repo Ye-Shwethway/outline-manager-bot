@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/deleteserver`, `/setkeylimit`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
     "- *Admins + Owner:* `/servers`, `/newkey`, `/manage`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -31,6 +31,7 @@ HELP_TEXT = (
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
     "- `/listadmin` List admins (owner only)\n"
     "- `/addserver <alias> <api_url> <cert_sha256>` Add Outline server (owner only)\n"
+    "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n\n"
     "*Examples*\n"
@@ -77,6 +78,7 @@ def main():
     app.add_handler(CommandHandler("removeadmin", owner.remove_admin))
     app.add_handler(CommandHandler("listadmin", owner.list_admin))
     app.add_handler(CommandHandler("addserver", owner.add_server))
+    app.add_handler(CommandHandler("listserver", owner.list_server))
     app.add_handler(CommandHandler("deleteserver", owner.delete_server))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     

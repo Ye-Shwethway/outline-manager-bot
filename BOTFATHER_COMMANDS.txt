@@ -8,5 +8,6 @@ addadmin - Owner: add an admin user
 removeadmin - Owner: remove an admin user
 listadmin - Owner: list all admins
 addserver - Owner: add an Outline server
+listserver - Owner: list configured server aliases
 deleteserver - Owner: delete a server
 setkeylimit - Owner: set server key limit

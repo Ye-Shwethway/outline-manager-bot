@@ -55,6 +55,22 @@ async def add_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Server alias `{alias}` already exists.", parse_mode='Markdown')
 
 @owner_only
+async def list_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /listserver - list configured server aliases and limits."""
+    servers = queries.get_servers()
+    if not servers:
+        await update.message.reply_text("No servers configured yet.")
+        return
+
+    lines = ["🌐 *Configured Servers:*"]
+    for alias, data in servers.items():
+        limit = data.get("max_key_count", 0)
+        limit_text = str(limit) if limit and limit > 0 else "Unlimited"
+        lines.append(f"- `{alias}` | Max Keys: *{limit_text}*")
+
+    await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+
+@owner_only
 async def delete_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
         await update.message.reply_text("Usage: `/deleteserver <alias>`", parse_mode='Markdown')
