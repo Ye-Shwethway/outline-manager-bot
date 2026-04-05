@@ -6,6 +6,11 @@ from src.database import queries
 
 logger = logging.getLogger(__name__)
 
+def _strip_outline_label(value: str, label: str) -> str:
+    """Accept values copied from access.txt lines such as `apiUrl:...`."""
+    prefix = f"{label}:"
+    return value[len(prefix):].strip() if value.startswith(prefix) else value.strip()
+
 @owner_only
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
@@ -48,6 +53,13 @@ async def add_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     alias, api_url, cert_sha256 = context.args
+    api_url = _strip_outline_label(api_url, "apiUrl")
+    cert_sha256 = _strip_outline_label(cert_sha256, "certSha256")
+
+    if not api_url.startswith("http://") and not api_url.startswith("https://"):
+        await update.message.reply_text("❌ Invalid API URL. It must start with http:// or https://")
+        return
+
     # By default, max_key_count is 0 (which we will treat as unlimited)
     if queries.add_server(alias, api_url, cert_sha256):
         await update.message.reply_text(f"✅ Server `{alias}` added successfully.", parse_mode='Markdown')
@@ -66,7 +78,8 @@ async def list_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for alias, data in servers.items():
         limit = data.get("max_key_count", 0)
         limit_text = str(limit) if limit and limit > 0 else "Unlimited"
-        lines.append(f"- `{alias}` | Max Keys: *{limit_text}*")
+        url_flag = " ⚠️ Check URL" if str(data.get("api_url", "")).startswith("apiUrl:") else ""
+        lines.append(f"- `{alias}` | Max Keys: *{limit_text}*{url_flag}")
 
     await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
 
