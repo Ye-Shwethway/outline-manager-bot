@@ -20,6 +20,9 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
     
     keyboard = [
         [
+            InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")
+        ],
+        [
             InlineKeyboardButton(sold_text, callback_data=f"toggle_{server_alias}_{key_id}")
         ],
         [

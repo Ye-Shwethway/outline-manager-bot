@@ -19,13 +19,13 @@ HELP_TEXT = (
     "2. Owner sets capacity with `/setkeylimit <alias> <max_keys>` (0 = unlimited)\n"
     "3. Admin uses `/newkey` to create keys interactively\n"
     "4. Admin uses `/servers` to inspect keys and statuses\n"
-    "5. Admin uses `/manage <alias> <key_id>` to mark sold/unsold or delete\n\n"
+    "5. Admin uses `/manage <alias> <key_id>` to view key URL, mark sold/unsold, or delete\n\n"
     "*Commands*\n"
     "- `/start` Show welcome message\n"
     "- `/help` Show this guide\n"
     "- `/servers` Show servers as inline buttons\n"
     "- `/newkey` Start interactive key creation wizard\n"
-    "- `/manage <server_alias> <key_id>` Open key actions\n"
+    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Mark Sold, Delete)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
@@ -88,7 +88,7 @@ def main():
     
     # 6. Register Callbacks (Inline Buttons)
     app.add_handler(CallbackQueryHandler(lists.handle_listkeys_callback, pattern="^listkeys_"))
-    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(toggle|delete)_"))
+    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete)_"))
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)

@@ -79,7 +79,7 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles Mark Sold / Delete actions from the manage key keyboard."""
     query = update.callback_query
-    data = query.data.split("_")
+    data = query.data.split("_", 2)
     action = data[0]
     alias = data[1]
     key_id = data[2]
@@ -92,6 +92,32 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         # Refresh the keyboard to show the opposite toggle button
         keyboard = get_key_management_keyboard(alias, key_id, new_status)
         await query.edit_message_reply_markup(reply_markup=keyboard)
+
+    elif action == "view":
+        client = get_vpn_client(alias)
+        if not client:
+            await query.answer("Could not connect to server.", show_alert=True)
+            return
+
+        try:
+            keys = client.get_keys()
+            target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+            if not target_key:
+                await query.answer("Key not found on server.", show_alert=True)
+                return
+
+            if not target_key.access_url:
+                await query.answer("Access URL unavailable for this key.", show_alert=True)
+                return
+
+            await query.answer("Access URL sent.", show_alert=True)
+            await query.message.reply_text(
+                f"🔑 *Key Access URL*\n\nServer: `{alias}`\nKey ID: `{key_id}`\n\n`{target_key.access_url}`",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            await query.answer("Failed to fetch key details.", show_alert=True)
+            logger.error(f"View key error: {e}")
 
     elif action == "delete":
         client = get_vpn_client(alias)
