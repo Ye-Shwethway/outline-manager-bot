@@ -99,6 +99,10 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         client = get_vpn_client(alias)
         if not client:
             await query.answer("Could not connect to server.", show_alert=True)
+            await query.edit_message_text(
+                f"❌ View action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
             return
 
         try:
@@ -106,10 +110,18 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
             if not target_key:
                 await query.answer("Key not found on server.", show_alert=True)
+                await query.edit_message_text(
+                    f"❌ Key `{key_id}` was not found on `{alias}`.",
+                    parse_mode='Markdown'
+                )
                 return
 
             if not target_key.access_url:
                 await query.answer("Access URL unavailable for this key.", show_alert=True)
+                await query.edit_message_text(
+                    f"❌ Access URL is unavailable for key `{key_id}` on `{alias}`.",
+                    parse_mode='Markdown'
+                )
                 return
 
             await query.answer("Access URL sent.", show_alert=True)
@@ -125,15 +137,30 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         except Exception as e:
             await query.answer("Failed to fetch key details.", show_alert=True)
             logger.error(f"View key error: {e}")
+            await query.edit_message_text(
+                f"❌ View action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
 
     elif action == "delete":
         client = get_vpn_client(alias)
-        if client:
-            try:
-                client.delete_key(key_id)
-                queries.remove_key_metadata(alias, key_id)
-                await query.answer("Key deleted successfully!", show_alert=True)
-                await query.edit_message_text(f"🗑️ Key `{key_id}` was deleted from `{alias}`.", parse_mode='Markdown')
-            except Exception as e:
-                await query.answer("Failed to delete key.", show_alert=True)
-                logger.error(f"Delete error: {e}")
+        if not client:
+            await query.answer("Could not connect to server.", show_alert=True)
+            await query.edit_message_text(
+                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
+            return
+
+        try:
+            client.delete_key(key_id)
+            queries.remove_key_metadata(alias, key_id)
+            await query.answer("Key deleted successfully!", show_alert=True)
+            await query.edit_message_text(f"🗑️ Key `{key_id}` was deleted from `{alias}`.", parse_mode='Markdown')
+        except Exception as e:
+            await query.answer("Failed to delete key.", show_alert=True)
+            logger.error(f"Delete error: {e}")
+            await query.edit_message_text(
+                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )

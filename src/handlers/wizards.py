@@ -38,10 +38,15 @@ async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_T
         if not client:
             await query.edit_message_text("❌ Cannot reach server to verify limits.")
             return ConversationHandler.END
-            
-        current_keys = client.get_keys()
-        if len(current_keys) >= max_keys:
-            await query.edit_message_text(f"⚠️ *Limit Reached!*\n\nServer `{alias}` is capped at {max_keys} keys.", parse_mode='Markdown')
+
+        try:
+            current_keys = client.get_keys()
+            if len(current_keys) >= max_keys:
+                await query.edit_message_text(f"⚠️ *Limit Reached!*\n\nServer `{alias}` is capped at {max_keys} keys.", parse_mode='Markdown')
+                return ConversationHandler.END
+        except Exception as e:
+            logger.error(f"Error validating server limits for {alias}: {e}")
+            await query.edit_message_text("❌ Failed to verify server key limits.")
             return ConversationHandler.END
 
     await query.edit_message_text(f"Server selected: `{alias}`\n\n📝 Please type a **Name** for this key:", parse_mode='Markdown')
