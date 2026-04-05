@@ -13,17 +13,19 @@ HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
-    "- *Admins + Owner:* `/servers`, `/newkey`, `/manage`\n\n"
+    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`\n"
+    "- *Everyone:* `/start`, `/help`, `/id`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
     "2. Owner sets capacity with `/setkeylimit <alias> <max_keys>` (0 = unlimited)\n"
     "3. Admin uses `/newkey` to create keys interactively\n"
-    "4. Admin uses `/servers` to inspect keys and statuses\n"
+    "4. Admin uses `/keys` to inspect keys and statuses\n"
     "5. Admin uses `/manage <alias> <key_id>` to view key URL, mark sold/unsold, or delete\n\n"
     "*Commands*\n"
     "- `/start` Show welcome message\n"
     "- `/help` Show this guide\n"
-    "- `/servers` Show servers as inline buttons\n"
+    "- `/id` Show your Telegram user id\n"
+    "- `/keys` Show servers as inline buttons for key management\n"
     "- `/newkey` Start interactive key creation wizard\n"
     "- `/manage <server_alias> <key_id>` Open key actions (View URL, Mark Sold, Delete)\n"
     "- `/cancel` Cancel active wizard\n"
@@ -47,6 +49,14 @@ async def start_command(update: Update, context):
         "🛡️ *Outline Server Manager*\n\nUse `/help` to view the full command guide.",
         parse_mode='Markdown'
     )
+
+async def id_command(update: Update, context):
+    """Public command to show the caller's Telegram user id."""
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("❌ Could not determine your user id.")
+        return
+    await update.message.reply_text(f"🆔 Your Telegram user id is: `{user.id}`", parse_mode='Markdown')
 
 async def help_command(update: Update, context):
     """Detailed usage guide for all supported commands."""
@@ -72,6 +82,7 @@ def main():
     # 3. Register Basic Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("id", id_command))
     
     # 4. Register Owner Commands
     app.add_handler(CommandHandler("addadmin", owner.add_admin))
@@ -83,7 +94,7 @@ def main():
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     
     # 5. Register List & Manage Commands
-    app.add_handler(CommandHandler("servers", lists.list_servers))
+    app.add_handler(CommandHandler("keys", lists.list_servers))
     app.add_handler(CommandHandler("manage", lists.manage_key_command))
     
     # 6. Register Callbacks (Inline Buttons)

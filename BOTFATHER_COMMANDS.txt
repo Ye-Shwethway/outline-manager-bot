@@ -1,6 +1,7 @@
 start - Start the bot
 help - Show full usage guide
-servers - Show configured servers
+id - Show your Telegram user id
+keys - Key management menu
 newkey - Create a new key with wizard
 manage - Manage one key by alias and key_id
 cancel - Cancel active wizard

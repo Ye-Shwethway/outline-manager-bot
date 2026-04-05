@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @admin_only
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /servers"""
+    """Command: /keys"""
     servers = queries.get_servers()
     if not servers:
         await update.message.reply_text("No servers configured yet. Owner needs to use /addserver.")
@@ -151,8 +151,17 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
 
             await query.answer("Access URL sent.", show_alert=True)
             key_name = target_key.name or "Unnamed"
+            used_mb = target_key.used_bytes / (1024 * 1024) if target_key.used_bytes else 0
+            if target_key.data_limit:
+                limit_gb = target_key.data_limit / (1024 * 1024 * 1024)
+                available_bytes = max(target_key.data_limit - (target_key.used_bytes or 0), 0)
+                available_gb = available_bytes / (1024 * 1024 * 1024)
+                usage_line = f"Available Usage: *{available_gb:.2f} GB* (Used: {used_mb:.2f} MB / Limit: {limit_gb:.2f} GB)"
+            else:
+                usage_line = f"Available Usage: *Unlimited* (Used: {used_mb:.2f} MB)"
+
             await query.message.reply_text(
-                f"🔑 *Key Access URL*\n\nServer: `{alias}`\nKey ID: `{key_id}`\nName: *{key_name}*\n\n`{target_key.access_url}`",
+                f"🔑 *Key Access URL*\n\nServer: `{alias}`\nKey ID: `{key_id}`\nName: *{key_name}*\n{usage_line}\n\n`{target_key.access_url}`",
                 parse_mode='Markdown'
             )
             await query.edit_message_text(
