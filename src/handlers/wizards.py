@@ -13,6 +13,8 @@ from src.utils.inline_messages import (
 
 logger = logging.getLogger(__name__)
 
+BYTES_PER_GB = 1_000_000_000
+
 # Conversation States
 SELECT_SERVER, ASK_NAME, ASK_LIMIT = range(3)
 
@@ -94,7 +96,7 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Apply Limit if > 0
         if limit_gb > 0:
-            limit_bytes = int(limit_gb * 1024 * 1024 * 1024)
+            limit_bytes = int(limit_gb * BYTES_PER_GB)
             client.add_data_limit(new_key.key_id, limit_bytes)
             
         msg = (

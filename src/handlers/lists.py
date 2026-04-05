@@ -13,6 +13,9 @@ from src.utils.inline_messages import (
 
 logger = logging.getLogger(__name__)
 
+BYTES_PER_MB = 1_000_000
+BYTES_PER_GB = 1_000_000_000
+
 @admin_only
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command: /keys"""
@@ -58,8 +61,8 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             return
 
         for key in keys:
-            used_mb = key.used_bytes / (1024 * 1024) if key.used_bytes else 0
-            limit_gb = key.data_limit / (1024 * 1024 * 1024) if key.data_limit else "No Limit"
+            used_mb = key.used_bytes / BYTES_PER_MB if key.used_bytes else 0
+            limit_gb = key.data_limit / BYTES_PER_GB if key.data_limit else "No Limit"
             limit_str = f"{limit_gb:.2f} GB" if isinstance(limit_gb, float) else limit_gb
             sold_tag = "🔴 [SOLD]" if key.key_id in sold_keys else "🟢 [AVAILABLE]"
             
@@ -151,11 +154,11 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
 
             await query.answer("Access URL sent.", show_alert=True)
             key_name = target_key.name or "Unnamed"
-            used_mb = target_key.used_bytes / (1024 * 1024) if target_key.used_bytes else 0
+            used_mb = target_key.used_bytes / BYTES_PER_MB if target_key.used_bytes else 0
             if target_key.data_limit:
-                limit_gb = target_key.data_limit / (1024 * 1024 * 1024)
+                limit_gb = target_key.data_limit / BYTES_PER_GB
                 available_bytes = max(target_key.data_limit - (target_key.used_bytes or 0), 0)
-                available_gb = available_bytes / (1024 * 1024 * 1024)
+                available_gb = available_bytes / BYTES_PER_GB
                 usage_line = f"Available Usage: *{available_gb:.2f} GB* (Used: {used_mb:.2f} MB / Limit: {limit_gb:.2f} GB)"
             else:
                 usage_line = f"Available Usage: *Unlimited* (Used: {used_mb:.2f} MB)"
