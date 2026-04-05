@@ -1,8 +1,9 @@
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
-from src.utils.decorators import owner_only
+from src.utils.decorators import owner_only, admin_only
 from src.database import queries
+from src.services.notifier import monitor_used_up_keys
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +110,18 @@ async def set_key_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❌ Limit must be an integer.")
 
-@owner_only
+@admin_only
 async def set_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /noti <on|off> - toggle used-up key notifications."""
+    """Command: /noti <on|off> - toggle per-user used-up key notifications."""
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("❌ Could not determine your user id.")
+        return
+
     if len(context.args) != 1:
-        status = "ON" if queries.is_notification_enabled() else "OFF"
+        status = "ON" if queries.is_user_notification_enabled(user.id) else "OFF"
         await update.message.reply_text(
-            f"Usage: `/noti <on|off>`\nCurrent status: *{status}*",
+            f"Usage: `/noti <on|off>`\nYour notification status: *{status}*",
             parse_mode='Markdown',
         )
         return
@@ -126,6 +132,21 @@ async def set_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     enabled = arg == "on"
-    queries.set_notification_enabled(enabled)
+    queries.set_user_notification_enabled(user.id, enabled)
     state_text = "ON" if enabled else "OFF"
-    await update.message.reply_text(f"🔔 Notifications are now *{state_text}*.", parse_mode='Markdown')
+    await update.message.reply_text(f"🔔 Your notifications are now *{state_text}*.", parse_mode='Markdown')
+
+@admin_only
+async def scan_used_up_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /scan - run immediate used-up scan and notify recipients."""
+    await update.message.reply_text("🔎 Running immediate key usage scan...")
+    result = await monitor_used_up_keys(context)
+    await update.message.reply_text(
+        (
+            "✅ Scan finished.\n"
+            f"Servers scanned: *{result['servers_scanned']}*\n"
+            f"Keys scanned: *{result['keys_scanned']}*\n"
+            f"New alerts sent: *{result['alerts_sent']}*"
+        ),
+        parse_mode='Markdown',
+    )

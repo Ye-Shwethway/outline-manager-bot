@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`, `/noti`\n"
-    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
+    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`\n"
     "- *Everyone:* `/start`, `/help`, `/id`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -41,12 +41,14 @@ HELP_TEXT = (
     "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
-    "- `/noti <on|off>` Toggle used-up key alerts to owner/admins (owner only)\n\n"
+    "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
+    "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n\n"
     "*Examples*\n"
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
+    "- `/scan`\n"
     "- `/manage vps1 7`"
 )
 
@@ -112,6 +114,7 @@ def main():
     app.add_handler(CommandHandler("deleteserver", owner.delete_server))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     app.add_handler(CommandHandler("noti", owner.set_notifications))
+    app.add_handler(CommandHandler("scan", owner.scan_used_up_keys))
     
     # 5. Register List & Manage Commands
     app.add_handler(CommandHandler("keys", lists.list_servers))

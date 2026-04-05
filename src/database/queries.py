@@ -1,4 +1,5 @@
 import sqlite3
+from src.config import OWNER_ID
 from src.database.connection import get_connection
 
 # --- Admin Operations ---
@@ -115,12 +116,26 @@ def set_key_used_up_notified(server_alias: str, key_id: str, notified: bool):
                 (server_alias, key_id, False, notified),
             )
 
-def is_notification_enabled() -> bool:
+def is_user_notification_enabled(user_id: int) -> bool:
     with get_connection() as conn:
-        cursor = conn.execute('SELECT is_enabled FROM notification_settings WHERE id = 1')
+        cursor = conn.execute(
+            'SELECT is_enabled FROM user_notification_settings WHERE user_id = ?',
+            (user_id,),
+        )
         row = cursor.fetchone()
         return bool(row['is_enabled']) if row else True
 
-def set_notification_enabled(is_enabled: bool):
+def set_user_notification_enabled(user_id: int, is_enabled: bool):
     with get_connection() as conn:
-        conn.execute('UPDATE notification_settings SET is_enabled = ? WHERE id = 1', (is_enabled,))
+        conn.execute(
+            '''
+            INSERT INTO user_notification_settings (user_id, is_enabled)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET is_enabled = excluded.is_enabled
+            ''',
+            (user_id, is_enabled),
+        )
+
+def get_notification_recipients() -> list[int]:
+    candidates = sorted(set([OWNER_ID, *get_admins()]))
+    return [user_id for user_id in candidates if is_user_notification_enabled(user_id)]

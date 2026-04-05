@@ -57,6 +57,14 @@ def init_db():
             )
         ''')
 
+        # 5. Per-user notification preferences (owner/admin each can toggle).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_notification_settings (
+                user_id INTEGER PRIMARY KEY,
+                is_enabled BOOLEAN DEFAULT 1
+            )
+        ''')
+
         # Backward-compatible migration for older DBs missing used_up_notified.
         cursor.execute("PRAGMA table_info(key_metadata)")
         key_metadata_columns = {row[1] for row in cursor.fetchall()}
@@ -67,6 +75,21 @@ def init_db():
         cursor.execute(
             "INSERT OR IGNORE INTO notification_settings (id, is_enabled) VALUES (1, 1)"
         )
+
+        # Backfill per-user settings from current owner/admin list, respecting old global switch.
+        cursor.execute("SELECT is_enabled FROM notification_settings WHERE id = 1")
+        global_enabled_row = cursor.fetchone()
+        global_enabled = bool(global_enabled_row[0]) if global_enabled_row else True
+
+        cursor.execute("SELECT user_id FROM admins")
+        admin_ids = [row[0] for row in cursor.fetchall()]
+
+        from src.config import OWNER_ID
+        for user_id in [OWNER_ID, *admin_ids]:
+            cursor.execute(
+                "INSERT OR IGNORE INTO user_notification_settings (user_id, is_enabled) VALUES (?, ?)",
+                (user_id, global_enabled),
+            )
         
         conn.commit()
         logger.info("Database initialized successfully.")

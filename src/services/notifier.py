@@ -1,7 +1,6 @@
 import logging
 from telegram.ext import ContextTypes
 
-from src.config import OWNER_ID
 from src.database import queries
 from src.services.outline_api import get_vpn_client
 
@@ -16,14 +15,18 @@ def _is_key_used_up(key) -> bool:
 
 async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
     """Background monitor that alerts owner/admins when keys reach data limit."""
-    if not queries.is_notification_enabled():
-        return
+    result = {
+        "servers_scanned": 0,
+        "keys_scanned": 0,
+        "alerts_sent": 0,
+    }
 
-    recipients = sorted(set(queries.get_admins() + [OWNER_ID]))
+    recipients = queries.get_notification_recipients()
     if not recipients:
-        return
+        return result
 
     for alias in queries.get_servers().keys():
+        result["servers_scanned"] += 1
         client = get_vpn_client(alias)
         if not client:
             continue
@@ -35,6 +38,7 @@ async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
             continue
 
         for key in keys:
+            result["keys_scanned"] += 1
             key_id = str(key.key_id)
             used_up = _is_key_used_up(key)
             already_notified = queries.is_key_used_up_notified(alias, key_id)
@@ -55,6 +59,7 @@ async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
                 for user_id in recipients:
                     try:
                         await context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+                        result["alerts_sent"] += 1
                     except Exception as send_err:
                         logger.warning(f"Failed to send used-up alert to {user_id}: {send_err}")
 
@@ -63,3 +68,5 @@ async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
             elif not used_up and already_notified:
                 # Reset state so this key can alert again in the future.
                 queries.set_key_used_up_notified(alias, key_id, False)
+
+    return result

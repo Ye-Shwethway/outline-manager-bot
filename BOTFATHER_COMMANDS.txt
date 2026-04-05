@@ -12,4 +12,5 @@ addserver - Owner: add an Outline server
 listserver - Owner: list configured server aliases
 deleteserver - Owner: delete a server
 setkeylimit - Owner: set server key limit
-noti - Owner: toggle used-up key alerts
+noti - Admin/Owner: toggle your used-up alerts
+scan - Admin/Owner: run immediate used-up scan
