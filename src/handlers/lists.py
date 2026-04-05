@@ -88,10 +88,12 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         new_status = queries.toggle_key_sold(alias, key_id)
         status_text = "Sold" if new_status else "Available"
         await query.answer(f"Key marked as {status_text}!")
-        
-        # Refresh the keyboard to show the opposite toggle button
-        keyboard = get_key_management_keyboard(alias, key_id, new_status)
-        await query.edit_message_reply_markup(reply_markup=keyboard)
+
+        # Auto-close manage action buttons after a terminal action.
+        await query.edit_message_text(
+            f"✅ Key `{key_id}` on `{alias}` marked as *{status_text}*.",
+            parse_mode='Markdown'
+        )
 
     elif action == "view":
         client = get_vpn_client(alias)
@@ -111,8 +113,13 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 return
 
             await query.answer("Access URL sent.", show_alert=True)
+            key_name = target_key.name or "Unnamed"
             await query.message.reply_text(
-                f"🔑 *Key Access URL*\n\nServer: `{alias}`\nKey ID: `{key_id}`\n\n`{target_key.access_url}`",
+                f"🔑 *Key Access URL*\n\nServer: `{alias}`\nKey ID: `{key_id}`\nName: *{key_name}*\n\n`{target_key.access_url}`",
+                parse_mode='Markdown'
+            )
+            await query.edit_message_text(
+                f"✅ View action finished for key `{key_id}` on `{alias}`.",
                 parse_mode='Markdown'
             )
         except Exception as e:
