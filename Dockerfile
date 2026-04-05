@@ -13,7 +13,6 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src /app/src
-COPY data /app/data
 
 # Create an unprivileged runtime user.
 RUN useradd --create-home --uid 10001 botuser \
