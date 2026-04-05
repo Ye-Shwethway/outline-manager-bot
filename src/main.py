@@ -9,19 +9,47 @@ from src.handlers import owner, lists, wizards
 
 logger = logging.getLogger(__name__)
 
+HELP_TEXT = (
+    "🛡️ *Outline Server Manager Bot Guide*\n\n"
+    "*Who can use what*\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/deleteserver`, `/setkeylimit`\n"
+    "- *Admins + Owner:* `/servers`, `/newkey`, `/manage`\n\n"
+    "*Quick start*\n"
+    "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
+    "2. Owner sets capacity with `/setkeylimit <alias> <max_keys>` (0 = unlimited)\n"
+    "3. Admin uses `/newkey` to create keys interactively\n"
+    "4. Admin uses `/servers` to inspect keys and statuses\n"
+    "5. Admin uses `/manage <alias> <key_id>` to mark sold/unsold or delete\n\n"
+    "*Commands*\n"
+    "- `/start` Show welcome message\n"
+    "- `/help` Show this guide\n"
+    "- `/servers` Show servers as inline buttons\n"
+    "- `/newkey` Start interactive key creation wizard\n"
+    "- `/manage <server_alias> <key_id>` Open key actions\n"
+    "- `/cancel` Cancel active wizard\n"
+    "- `/addadmin <user_id>` Add admin (owner only)\n"
+    "- `/removeadmin <user_id>` Remove admin (owner only)\n"
+    "- `/listadmin` List admins (owner only)\n"
+    "- `/addserver <alias> <api_url> <cert_sha256>` Add Outline server (owner only)\n"
+    "- `/deleteserver <alias>` Delete server (owner only)\n"
+    "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n\n"
+    "*Examples*\n"
+    "- `/addadmin 123456789`\n"
+    "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
+    "- `/setkeylimit vps1 50`\n"
+    "- `/manage vps1 7`"
+)
+
 async def start_command(update: Update, context):
     """The /start command."""
-    help_text = (
-        "🛡️ *Outline Server Manager*\n\n"
-        "*Admin Commands:*\n"
-        "`/servers` - Interactive server list\n"
-        "`/newkey` - Interactive key creator\n"
-        "`/manage <server> <key_id>` - Edit/Delete a specific key\n\n"
-        "*Owner Commands:*\n"
-        "`/addadmin` | `/removeadmin` | `/listadmin`\n"
-        "`/addserver` | `/deleteserver` | `/setkeylimit`"
+    await update.message.reply_text(
+        "🛡️ *Outline Server Manager*\n\nUse `/help` to view the full command guide.",
+        parse_mode='Markdown'
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def help_command(update: Update, context):
+    """Detailed usage guide for all supported commands."""
+    await update.message.reply_text(HELP_TEXT, parse_mode='Markdown')
 
 async def global_error_handler(update: object, context):
     """Catch all uncaught handler errors so the bot does not fail silently."""
@@ -42,6 +70,7 @@ def main():
 
     # 3. Register Basic Commands
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
     
     # 4. Register Owner Commands
     app.add_handler(CommandHandler("addadmin", owner.add_admin))

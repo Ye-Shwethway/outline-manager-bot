@@ -1,0 +1,12 @@
+start - Start the bot
+help - Show full usage guide
+servers - Show configured servers
+newkey - Create a new key with wizard
+manage - Manage one key by alias and key_id
+cancel - Cancel active wizard
+addadmin - Owner: add an admin user
+removeadmin - Owner: remove an admin user
+listadmin - Owner: list all admins
+addserver - Owner: add an Outline server
+deleteserver - Owner: delete a server
+setkeylimit - Owner: set server key limit
