@@ -33,7 +33,8 @@ def init_db():
         # 2. Admins Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS admins (
-                user_id INTEGER PRIMARY KEY
+                user_id INTEGER PRIMARY KEY,
+                username TEXT
             )
         ''')
         
@@ -44,6 +45,8 @@ def init_db():
                 key_id TEXT,
                 is_sold BOOLEAN DEFAULT 0,
                 used_up_notified BOOLEAN DEFAULT 0,
+                created_by_user_id INTEGER,
+                created_by_username TEXT,
                 PRIMARY KEY (server_alias, key_id),
                 FOREIGN KEY (server_alias) REFERENCES servers(alias) ON DELETE CASCADE
             )
@@ -70,6 +73,15 @@ def init_db():
         key_metadata_columns = {row[1] for row in cursor.fetchall()}
         if "used_up_notified" not in key_metadata_columns:
             cursor.execute("ALTER TABLE key_metadata ADD COLUMN used_up_notified BOOLEAN DEFAULT 0")
+        if "created_by_user_id" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN created_by_user_id INTEGER")
+        if "created_by_username" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN created_by_username TEXT")
+
+        cursor.execute("PRAGMA table_info(admins)")
+        admins_columns = {row[1] for row in cursor.fetchall()}
+        if "username" not in admins_columns:
+            cursor.execute("ALTER TABLE admins ADD COLUMN username TEXT")
 
         # Ensure settings row always exists.
         cursor.execute(

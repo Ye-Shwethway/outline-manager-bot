@@ -19,8 +19,17 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         user_id = int(context.args[0])
-        if queries.add_admin(user_id):
-            await update.message.reply_text(f"✅ User `{user_id}` added as Admin.", parse_mode='Markdown')
+        username = None
+        try:
+            chat = await context.bot.get_chat(user_id)
+            username = chat.username
+        except Exception:
+            # User may not have started bot yet or privacy restrictions may apply.
+            pass
+
+        if queries.add_admin(user_id, username):
+            username_text = f" (@{username})" if username else ""
+            await update.message.reply_text(f"✅ User `{user_id}`{username_text} added as Admin.", parse_mode='Markdown')
         else:
             await update.message.reply_text(f"⚠️ User `{user_id}` is already an Admin.", parse_mode='Markdown')
     except ValueError:
@@ -40,11 +49,30 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def list_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admins = queries.get_admins()
-    if not admins:
+    admin_profiles = queries.get_admin_profiles()
+    if not admin_profiles:
         await update.message.reply_text("No admins found.")
         return
-    msg = "🛡️ *Current Admins:*\n" + "\n".join([f"- `{uid}`" for uid in admins])
+
+    lines = ["🛡️ *Current Admins:*"]
+    for admin in admin_profiles:
+        user_id = admin['user_id']
+        username = admin.get('username')
+
+        # Lazy-refresh missing usernames when possible.
+        if not username:
+            try:
+                chat = await context.bot.get_chat(user_id)
+                username = chat.username
+                if username:
+                    queries.update_admin_username(user_id, username)
+            except Exception:
+                username = None
+
+        username_text = f"@{username}" if username else "(username unavailable)"
+        lines.append(f"- `{user_id}` | {username_text}")
+
+    msg = "\n".join(lines)
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 @owner_only

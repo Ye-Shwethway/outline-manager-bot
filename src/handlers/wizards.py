@@ -83,6 +83,7 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     alias = context.user_data['wizard_alias']
     key_name = context.user_data['wizard_name']
+    creator_user = update.effective_user
     client = get_vpn_client(alias)
     
     if not client:
@@ -98,6 +99,14 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if limit_gb > 0:
             limit_bytes = int(limit_gb * BYTES_PER_GB)
             client.add_data_limit(new_key.key_id, limit_bytes)
+
+        creator_username = creator_user.username if creator_user else None
+        queries.set_key_creator(
+            alias,
+            str(new_key.key_id),
+            creator_user.id if creator_user else None,
+            creator_username,
+        )
             
         msg = (
             f"✅ *Key Created Successfully!*\n\n"

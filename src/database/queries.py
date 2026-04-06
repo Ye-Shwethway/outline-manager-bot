@@ -3,13 +3,17 @@ from src.config import OWNER_ID
 from src.database.connection import get_connection
 
 # --- Admin Operations ---
-def add_admin(user_id: int) -> bool:
+def add_admin(user_id: int, username: str | None = None) -> bool:
     try:
         with get_connection() as conn:
-            conn.execute('INSERT INTO admins (user_id) VALUES (?)', (user_id,))
+            conn.execute('INSERT INTO admins (user_id, username) VALUES (?, ?)', (user_id, username))
             return True
     except sqlite3.IntegrityError:
         return False # Already an admin
+
+def update_admin_username(user_id: int, username: str | None):
+    with get_connection() as conn:
+        conn.execute('UPDATE admins SET username = ? WHERE user_id = ?', (username, user_id))
 
 def remove_admin(user_id: int):
     with get_connection() as conn:
@@ -19,6 +23,17 @@ def get_admins() -> list[int]:
     with get_connection() as conn:
         cursor = conn.execute('SELECT user_id FROM admins')
         return [row['user_id'] for row in cursor.fetchall()]
+
+def get_admin_profiles() -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.execute('SELECT user_id, username FROM admins ORDER BY user_id')
+        return [
+            {
+                'user_id': row['user_id'],
+                'username': row['username'],
+            }
+            for row in cursor.fetchall()
+        ]
 
 # --- Server Operations ---
 def add_server(alias: str, api_url: str, cert_sha256: str, max_key_count: int = 0) -> bool:
@@ -85,6 +100,45 @@ def get_sold_keys(server_alias: str) -> set[str]:
     with get_connection() as conn:
         cursor = conn.execute('SELECT key_id FROM key_metadata WHERE server_alias = ? AND is_sold = 1', (server_alias,))
         return {row['key_id'] for row in cursor.fetchall()}
+
+def set_key_creator(server_alias: str, key_id: str, user_id: int | None, username: str | None):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT 1 FROM key_metadata WHERE server_alias = ? AND key_id = ?',
+            (server_alias, key_id),
+        )
+        if cursor.fetchone():
+            conn.execute(
+                '''
+                UPDATE key_metadata
+                SET created_by_user_id = ?, created_by_username = ?
+                WHERE server_alias = ? AND key_id = ?
+                ''',
+                (user_id, username, server_alias, key_id),
+            )
+        else:
+            conn.execute(
+                '''
+                INSERT INTO key_metadata
+                (server_alias, key_id, is_sold, used_up_notified, created_by_user_id, created_by_username)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''',
+                (server_alias, key_id, False, False, user_id, username),
+            )
+
+def get_key_creators(server_alias: str) -> dict[str, str]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT key_id, created_by_username
+            FROM key_metadata
+            WHERE server_alias = ?
+              AND created_by_username IS NOT NULL
+              AND TRIM(created_by_username) != ''
+            ''',
+            (server_alias,),
+        )
+        return {row['key_id']: row['created_by_username'] for row in cursor.fetchall()}
 
 def remove_key_metadata(server_alias: str, key_id: str):
     with get_connection() as conn:
