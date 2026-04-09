@@ -45,3 +45,15 @@ def get_delete_confirmation_keyboard(server_alias: str, key_id: str) -> InlineKe
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
+
+def get_post_create_sold_keyboard(server_alias: str, key_id: str) -> InlineKeyboardMarkup:
+    """Keyboard shown after key creation to quickly mark it sold or keep available."""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Mark Sold", callback_data=f"postsold_yes_{server_alias}_{key_id}")
+        ],
+        [
+            InlineKeyboardButton("➡️ Keep Available", callback_data=f"postsold_no_{server_alias}_{key_id}")
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)

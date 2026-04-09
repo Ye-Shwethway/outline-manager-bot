@@ -95,6 +95,28 @@ def toggle_key_sold(server_alias: str, key_id: str) -> bool:
                          (server_alias, key_id, new_status))
         return new_status
 
+def set_key_sold(server_alias: str, key_id: str, is_sold: bool):
+    """Sets sold status explicitly without toggling."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT 1 FROM key_metadata WHERE server_alias = ? AND key_id = ?',
+            (server_alias, key_id),
+        )
+        if cursor.fetchone():
+            conn.execute(
+                'UPDATE key_metadata SET is_sold = ? WHERE server_alias = ? AND key_id = ?',
+                (is_sold, server_alias, key_id),
+            )
+        else:
+            conn.execute(
+                '''
+                INSERT INTO key_metadata
+                (server_alias, key_id, is_sold, used_up_notified)
+                VALUES (?, ?, ?, ?)
+                ''',
+                (server_alias, key_id, is_sold, False),
+            )
+
 def get_sold_keys(server_alias: str) -> set[str]:
     """Returns a set of key_ids that are marked as sold for a specific server."""
     with get_connection() as conn:

@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, Call
 from src.utils.decorators import admin_only
 from src.database import queries
 from src.services.outline_api import get_vpn_client
-from src.utils.keyboards import get_server_list_keyboard
+from src.utils.keyboards import get_server_list_keyboard, get_post_create_sold_keyboard
 from src.utils.inline_messages import (
     close_active_inline_message,
     set_active_inline_message,
@@ -133,6 +133,10 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Manage later: `/manage {alias} {new_key.key_id}`"
         )
         await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(
+            "Mark this newly generated key as sold now?",
+            reply_markup=get_post_create_sold_keyboard(alias, str(new_key.key_id)),
+        )
     except Exception as e:
         logger.error(f"Error creating key: {e}")
         await update.message.reply_text("❌ An error occurred while creating the key.")
@@ -146,6 +150,29 @@ async def cancel_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Wizard cancelled.")
     context.user_data.clear()
     return ConversationHandler.END
+
+@admin_only
+async def handle_post_create_sold_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles post-creation sold decision without touching the key info message above."""
+    query = update.callback_query
+    await query.answer()
+
+    payload = query.data[len("postsold_"):]
+    decision, _, remainder = payload.partition("_")
+    alias, _, key_id = remainder.rpartition("_")
+
+    if decision == "yes":
+        queries.set_key_sold(alias, key_id, True)
+        await query.edit_message_text(
+            f"✅ Key `{key_id}` on `{alias}` is now marked as *SOLD*.",
+            parse_mode='Markdown'
+        )
+    else:
+        queries.set_key_sold(alias, key_id, False)
+        await query.edit_message_text(
+            f"✅ Key `{key_id}` on `{alias}` remains *AVAILABLE*.",
+            parse_mode='Markdown'
+        )
 
 # Build the Conversation Handler to be imported by main.py
 newkey_conv_handler = ConversationHandler(
