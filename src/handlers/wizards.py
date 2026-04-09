@@ -31,6 +31,7 @@ async def newkey_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_inline_message(context, sent.message_id)
     return SELECT_SERVER
 
+@admin_only
 async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -40,6 +41,11 @@ async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_T
     
     # 1. Enforce Server Key Limits
     server_data = queries.get_server(alias)
+    if not server_data:
+        await query.edit_message_text(f"❌ Server `{alias}` was not found.", parse_mode='Markdown')
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return ConversationHandler.END
     max_keys = server_data.get('max_key_count', 0)
     
     if max_keys > 0:
@@ -69,11 +75,13 @@ async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_T
         clear_if_matches(context, query.message.message_id)
     return ASK_NAME
 
+@admin_only
 async def newkey_ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['wizard_name'] = update.message.text
     await update.message.reply_text("💾 Please type the **Data Limit in GB** (e.g., 50).\nType `0` for no limit.", parse_mode='Markdown')
     return ASK_LIMIT
 
+@admin_only
 async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         limit_gb = float(update.message.text)
@@ -124,6 +132,7 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
+@admin_only
 async def cancel_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Wizard cancelled.")
     context.user_data.clear()
@@ -137,5 +146,6 @@ newkey_conv_handler = ConversationHandler(
         ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, newkey_ask_name)],
         ASK_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, newkey_ask_limit)],
     },
-    fallbacks=[CommandHandler('cancel', cancel_wizard)]
+    fallbacks=[CommandHandler('cancel', cancel_wizard)],
+    per_message=True,
 )
