@@ -44,7 +44,7 @@ def generate_backup_file(kind: str) -> str:
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
     now = datetime.now(timezone.utc)
-    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S_UTC")
+    timestamp = now.strftime("%d-%m-%y_%I:%M_%p")
     filename = f"{kind}_backup_{timestamp}.txt"
     file_path = os.path.join(BACKUP_DIR, filename)
 
