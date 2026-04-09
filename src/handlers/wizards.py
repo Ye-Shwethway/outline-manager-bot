@@ -156,5 +156,4 @@ newkey_conv_handler = ConversationHandler(
         ASK_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, newkey_ask_limit)],
     },
     fallbacks=[CommandHandler('cancel', cancel_wizard)],
-    per_message=True,
 )
