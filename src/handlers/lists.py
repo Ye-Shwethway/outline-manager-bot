@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 BYTES_PER_MB = 1_000_000
 BYTES_PER_GB = 1_000_000_000
+PENDING_DELETE_KEY = "pending_sold_delete"
 
 @admin_only
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -316,6 +317,26 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             clear_if_matches(context, query.message.message_id)
 
     elif action == "delyes":
+        sold_keys = queries.get_sold_keys(alias)
+        if str(key_id) in sold_keys:
+            context.user_data[PENDING_DELETE_KEY] = {
+                "alias": alias,
+                "key_id": str(key_id),
+            }
+            await query.answer("Final manual confirmation required.", show_alert=True)
+            await query.edit_message_text(
+                (
+                    "⚠️ *Final Delete Confirmation Required*\n\n"
+                    f"Key `{key_id}` on `{alias}` is marked as *SOLD*.\n"
+                    "To permanently delete it, type exactly `delete` in your next message.\n"
+                    "Type `cancel` to abort."
+                ),
+                parse_mode='Markdown'
+            )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
+            return
+
         client = get_vpn_client(alias)
         if not client:
             await query.answer("Could not connect to server.", show_alert=True)
@@ -325,6 +346,57 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             )
             if query.message:
                 clear_if_matches(context, query.message.message_id)
+
+@admin_only
+async def handle_manual_sold_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Final text confirmation step for deleting sold keys."""
+    pending = context.user_data.get(PENDING_DELETE_KEY)
+    if not pending or not update.message:
+        return
+
+    text = (update.message.text or "").strip().lower()
+    alias = pending.get("alias")
+    key_id = pending.get("key_id")
+
+    if text == "cancel":
+        context.user_data.pop(PENDING_DELETE_KEY, None)
+        await update.message.reply_text(
+            f"✅ Sold-key delete cancelled for `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    if text != "delete":
+        await update.message.reply_text(
+            "⚠️ Please type exactly `delete` to confirm, or `cancel` to abort.",
+            parse_mode='Markdown'
+        )
+        return
+
+    client = get_vpn_client(alias)
+    if not client:
+        context.user_data.pop(PENDING_DELETE_KEY, None)
+        await update.message.reply_text(
+            f"❌ Could not connect to server `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        client.delete_key(key_id)
+        queries.remove_key_metadata(alias, key_id)
+        await update.message.reply_text(
+            f"🗑️ Sold key `{key_id}` was deleted from `{alias}`.",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Manual sold delete error: {e}")
+        await update.message.reply_text(
+            f"❌ Delete failed for sold key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+    finally:
+        context.user_data.pop(PENDING_DELETE_KEY, None)
             return
 
         try:

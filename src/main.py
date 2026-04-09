@@ -1,6 +1,6 @@
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from src.config import BOT_TOKEN
 from src.database.connection import init_db
 from src.services.notifier import monitor_used_up_keys
@@ -127,6 +127,9 @@ def main():
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)
+
+    # 7.1 Register manual sold-key delete text confirmations
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^(delete|cancel)$"), lists.handle_manual_sold_delete_confirmation))
 
     # 8. Register Global Error Handler
     app.add_error_handler(global_error_handler)
