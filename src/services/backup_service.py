@@ -47,12 +47,13 @@ def generate_backup_file(kind: str) -> str:
     timestamp = now.strftime("%d-%m-%y_%I:%M_%p")
     filename = f"{kind}_backup_{timestamp}.txt"
     file_path = os.path.join(BACKUP_DIR, filename)
+    generated_text = now.strftime("%d-%m-%y_%I:%M_%p UTC")
 
     servers = queries.get_servers()
     lines = [
         "OUTLINE MANAGER BACKUP",
         f"Type: {kind}",
-        f"Generated UTC: {now.isoformat()}",
+        f"Generated UTC: {generated_text}",
         f"Server count: {len(servers)}",
         "",
     ]
