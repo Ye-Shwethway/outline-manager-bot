@@ -105,12 +105,45 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     alias, key_id = context.args
+    client = get_vpn_client(alias)
+    if not client:
+        await update.message.reply_text(f"❌ Could not connect to server `{alias}`.", parse_mode='Markdown')
+        return
+
+    try:
+        keys = client.get_keys()
+    except Exception as e:
+        logger.error(f"Manage key fetch error on {alias}: {e}")
+        await update.message.reply_text("❌ Error communicating with the Outline server.")
+        return
+
+    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+    if not target_key:
+        await update.message.reply_text(f"❌ Key `{key_id}` was not found on `{alias}`.", parse_mode='Markdown')
+        return
+
     sold_keys = queries.get_sold_keys(alias)
-    is_sold = key_id in sold_keys
+    is_sold = str(key_id) in sold_keys
+    used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+    if target_key.data_limit:
+        limit_gb = target_key.data_limit / BYTES_PER_GB
+        usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
+    else:
+        usage_line = f"{used_gb:.2f} GB / Unlimited"
 
     await close_active_inline_message(update, context)
     keyboard = get_key_management_keyboard(alias, key_id, is_sold)
-    sent = await update.message.reply_text(f"⚙️ *Managing Key {key_id} on {alias}*", reply_markup=keyboard, parse_mode='Markdown')
+    sent = await update.message.reply_text(
+        (
+            f"⚙️ *Manage Key*\n\n"
+            f"Server: `{alias}`\n"
+            f"Key ID: `{target_key.key_id}`\n"
+            f"Name: *{target_key.name or 'Unnamed'}*\n"
+            f"Usage: {usage_line}"
+        ),
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
     set_active_inline_message(context, sent.message_id)
 
 @admin_only
