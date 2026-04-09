@@ -238,13 +238,68 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 clear_if_matches(context, query.message.message_id)
 
     elif action == "delete":
+        client = get_vpn_client(alias)
+        if not client:
+            await query.answer("Could not connect to server.", show_alert=True)
+            await query.edit_message_text(
+                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
+            return
+
+        try:
+            keys = client.get_keys()
+        except Exception as e:
+            logger.error(f"Delete confirmation fetch error on {alias}: {e}")
+            await query.answer("Failed to fetch key details.", show_alert=True)
+            await query.edit_message_text(
+                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
+            return
+
+        target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+        if not target_key:
+            await query.answer("Key not found on server.", show_alert=True)
+            await query.edit_message_text(
+                f"❌ Key `{key_id}` was not found on `{alias}`.",
+                parse_mode='Markdown'
+            )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
+            return
+
+        used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+        if target_key.data_limit:
+            limit_gb = target_key.data_limit / BYTES_PER_GB
+            usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
+            is_used_up = (target_key.used_bytes or 0) >= target_key.data_limit
+        else:
+            usage_line = f"{used_gb:.2f} GB / Unlimited"
+            is_used_up = False
+
+        sold_keys = queries.get_sold_keys(alias)
+        if is_used_up:
+            status_tag = "🟠 USED UP"
+        elif str(key_id) in sold_keys:
+            status_tag = "🔴 SOLD"
+        else:
+            status_tag = "🟢 AVAILABLE"
+
         keyboard = get_delete_confirmation_keyboard(alias, key_id)
         await query.answer("Confirm delete to proceed.", show_alert=True)
         await query.edit_message_text(
             (
                 f"⚠️ *Delete Confirmation*\n\n"
                 f"Server: `{alias}`\n"
-                f"Key ID: `{key_id}`\n\n"
+                f"Key ID: `{key_id}`\n"
+                f"Name: *{target_key.name or 'Unnamed'}*\n"
+                f"Usage: {usage_line}\n"
+                f"Status: *{status_tag}*\n\n"
                 "This action cannot be undone."
             ),
             reply_markup=keyboard,
