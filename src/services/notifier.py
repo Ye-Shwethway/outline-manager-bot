@@ -45,14 +45,14 @@ async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
 
             if used_up and not already_notified:
                 key_name = key.name or "Unnamed"
-                used_mb = (key.used_bytes or 0) / 1_000_000
+                used_gb = (key.used_bytes or 0) / 1_000_000_000
                 limit_gb = key.data_limit / 1_000_000_000
                 text = (
                     "⚠️ *Key Used Up Alert*\n\n"
                     f"Server: `{alias}`\n"
                     f"Key ID: `{key_id}`\n"
                     f"Name: *{key_name}*\n"
-                    f"Usage: {used_mb:.2f} MB / {limit_gb:.2f} GB\n\n"
+                    f"Usage: {used_gb:.2f} GB / {limit_gb:.2f} GB\n\n"
                     "Action: Contact user for renewal/new key."
                 )
 
