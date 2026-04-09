@@ -17,6 +17,7 @@ env/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+data/backups/
 
 # Build and tooling
 .pytest_cache/

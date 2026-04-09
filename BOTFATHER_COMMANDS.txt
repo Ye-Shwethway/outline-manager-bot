@@ -14,3 +14,5 @@ deleteserver - Owner: delete a server
 setkeylimit - Owner: set server key limit
 noti - Admin/Owner: toggle your used-up alerts
 scan - Admin/Owner: run immediate used-up scan
+backup - Admin/Owner: generate manual backup file
+autobackup - Admin/Owner: get latest auto backup file

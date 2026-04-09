@@ -1,8 +1,10 @@
 import logging
+import os
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.utils.decorators import owner_only, admin_only
 from src.database import queries
+from src.services.backup_service import generate_backup_file, get_latest_backup_file
 from src.services.notifier import monitor_used_up_keys
 
 logger = logging.getLogger(__name__)
@@ -178,3 +180,36 @@ async def scan_used_up_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ),
         parse_mode='Markdown',
     )
+
+@admin_only
+async def backup_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /backup - generate and send immediate manual backup file."""
+    await update.message.reply_text("🗂️ Generating manual backup file...")
+    try:
+        file_path = generate_backup_file("manual")
+    except Exception as e:
+        logger.error(f"Manual backup failed: {e}")
+        await update.message.reply_text("❌ Manual backup failed.")
+        return
+
+    with open(file_path, "rb") as backup_file:
+        await update.message.reply_document(
+            document=backup_file,
+            filename=os.path.basename(file_path),
+            caption="🗂️ Latest manual backup",
+        )
+
+@admin_only
+async def get_last_auto_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /autobackup - send last generated automatic backup file."""
+    file_path = get_latest_backup_file("auto")
+    if not file_path:
+        await update.message.reply_text("No automatic backup file found yet.")
+        return
+
+    with open(file_path, "rb") as backup_file:
+        await update.message.reply_document(
+            document=backup_file,
+            filename=os.path.basename(file_path),
+            caption="🗂️ Last auto backup",
+        )

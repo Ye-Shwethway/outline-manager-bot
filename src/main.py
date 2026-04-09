@@ -1,8 +1,10 @@
 import logging
+from datetime import time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from src.config import BOT_TOKEN
 from src.database.connection import init_db
+from src.services.backup_service import run_auto_backup_job
 from src.services.notifier import monitor_used_up_keys
 
 # Import our handlers
@@ -14,7 +16,7 @@ HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
-    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`\n"
+    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`\n"
     "- *Everyone:* `/start`, `/help`, `/id`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -42,13 +44,17 @@ HELP_TEXT = (
     "- `/deleteserver <alias>` Delete server (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
-    "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n\n"
+    "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n"
+    "- `/backup` Generate and send latest manual backup file (admin/owner)\n"
+    "- `/autobackup` Send latest daily auto backup file (admin/owner)\n\n"
     "*Examples*\n"
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
     "- `/scan`\n"
+    "- `/backup`\n"
+    "- `/autobackup`\n"
     "- `/manage vps1 7`"
 )
 
@@ -60,6 +66,11 @@ async def post_init(application):
             interval=300,
             first=45,
             name="used-up-key-notifier",
+        )
+        application.job_queue.run_daily(
+            run_auto_backup_job,
+            time=time(hour=0, minute=0),
+            name="daily-auto-backup",
         )
     else:
         logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
@@ -115,6 +126,8 @@ def main():
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     app.add_handler(CommandHandler("noti", owner.set_notifications))
     app.add_handler(CommandHandler("scan", owner.scan_used_up_keys))
+    app.add_handler(CommandHandler("backup", owner.backup_now))
+    app.add_handler(CommandHandler("autobackup", owner.get_last_auto_backup))
     
     # 5. Register List & Manage Commands
     app.add_handler(CommandHandler("keys", lists.list_servers))

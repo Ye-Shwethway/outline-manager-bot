@@ -25,3 +25,4 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- Application Constants ---
 DB_PATH = os.path.join("data", "bot_database.db")
+BACKUP_DIR = os.path.join("data", "backups")
