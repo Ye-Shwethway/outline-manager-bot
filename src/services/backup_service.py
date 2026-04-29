@@ -62,6 +62,11 @@ def generate_backup_file(kind: str) -> str:
     if not servers:
         lines.append("No servers configured.")
     else:
+        admin_username_map = {
+            int(item["user_id"]): item.get("username")
+            for item in queries.get_admin_profiles()
+            if item.get("user_id") is not None
+        }
         for alias in sorted(servers.keys()):
             server_data = servers[alias]
             lines.append(f"=== SERVER: {alias} ===")
@@ -105,9 +110,18 @@ def generate_backup_file(kind: str) -> str:
                 assigned_user_id = lifecycle.get("assigned_user_id") or "N/A"
                 assigned_username = "N/A"
                 if assigned_user_id != "N/A":
-                    customer = queries.get_customer(int(assigned_user_id))
-                    if customer and customer.get("username"):
-                        assigned_username = f"@{customer['username']}"
+                    try:
+                        owner_id = int(assigned_user_id)
+                    except (TypeError, ValueError):
+                        owner_id = None
+
+                    if owner_id is not None:
+                        customer = queries.get_customer(owner_id)
+                        username = customer.get("username") if customer else None
+                        if not username:
+                            username = admin_username_map.get(owner_id)
+                        if username:
+                            assigned_username = f"@{username}"
                 renew_count = lifecycle.get("renew_count") or 0
                 last_renewed_at_utc = lifecycle.get("last_renewed_at_utc") or "N/A"
                 last_renewed_quota_gb = lifecycle.get("last_renewed_quota_gb")
@@ -126,6 +140,8 @@ def generate_backup_file(kind: str) -> str:
                 lines.append(f"Auto Disabled At UTC: {auto_disabled_at_utc}")
                 lines.append(f"Assigned User ID: {assigned_user_id}")
                 lines.append(f"Assigned Username: {assigned_username}")
+                lines.append(f"Owner User ID: {assigned_user_id}")
+                lines.append(f"Owner Username: {assigned_username}")
                 lines.append(f"Renew Count: {renew_count}")
                 lines.append(f"Last Renewed At UTC: {last_renewed_at_utc}")
                 lines.append(f"Last Renewed Quota GB: {last_renewed_quota_text}")
