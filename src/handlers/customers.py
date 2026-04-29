@@ -656,7 +656,7 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [
         "🔎 *Search Results*",
         f"Query: `{q}`",
-        f"Matched Users: *{len(matched)}*",
+        f"Matched Assigned Users: *{len(matched)}*",
         "",
     ]
 
