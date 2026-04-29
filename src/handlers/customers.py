@@ -398,6 +398,13 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if existing and (existing.get("status") or "").lower() == "rejected":
+        await update.message.reply_text(
+            "⛔ Your account is permanently blocked from re-registering. Contact Owner/Admin for manual removal from the rejected list.",
+            parse_mode="Markdown",
+        )
+        return
+
     queries.upsert_customer(
         user_id=user.id,
         username=user.username,
