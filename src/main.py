@@ -82,7 +82,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/users` Show user registration overview (admin/owner)\n"
     "- `/approve <user_id>` Approve registered user (admin/owner)\n"
     "- `/reject <user_id>` Reject user (admin/owner)\n"
-    "- `/removeuser <user_id>` Remove user from registry and unlink assigned keys (admin/owner)\n"
+    "- `/removeuser <user_id>` Remove user from registry and unlink assigned keys, or unban from rejected list (admin/owner)\n"
     "- `/register` Submit your user registration request\n"
     "- `/mykeys` Show keys assigned to your account\n\n"
     "*Examples*\n"

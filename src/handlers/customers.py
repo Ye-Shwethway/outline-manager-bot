@@ -156,7 +156,8 @@ def _user_manage_keyboard(
             ]
         )
     if principal_type == "customer" and can_manage:
-        rows.append([InlineKeyboardButton("🗑 Remove User", callback_data=f"uadm_rmconfirm_{user_id}_{view_status}_c")])
+        remove_label = "♻️ Unban User" if customer_status == "rejected" else "🗑 Remove User"
+        rows.append([InlineKeyboardButton(remove_label, callback_data=f"uadm_rmconfirm_{user_id}_{view_status}_c")])
     rows.append(
         [
             InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_view_{view_status}"),
@@ -840,11 +841,20 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         if principal_type != "customer":
             await query.answer("Staff accounts cannot be removed from /users.", show_alert=True)
             return
+
+        customer = queries.get_customer(target_id)
+        customer_status = (customer.get("status") or "pending").lower() if customer else "pending"
+        action_title = "⚠️ *Confirm Unban*" if customer_status == "rejected" else "⚠️ *Confirm User Removal*"
+        action_desc = (
+            "This will remove the user from the rejected list (unban)."
+            if customer_status == "rejected"
+            else "This will remove the user from registry and unlink all assigned keys."
+        )
         await query.edit_message_text(
             (
-                "⚠️ *Confirm User Removal*\n\n"
+                f"{action_title}\n\n"
                 f"Target ID: `{target_id}`\n\n"
-                "This will remove the user from registry and unlink all assigned keys."
+                f"{action_desc}"
             ),
             parse_mode="Markdown",
             reply_markup=_remove_confirm_keyboard(view_status, target_id),
@@ -941,9 +951,13 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         if not existing:
             await query.answer("User not found in registry.", show_alert=True)
         else:
+            existing_status = (existing.get("status") or "pending").lower()
             _remove_user_workflow(target_id, actor.id, actor.username)
             await _notify_user_status(context, target_id, "removed")
-            await query.answer("User removed.")
+            if existing_status == "rejected":
+                await query.answer("User unbanned.")
+            else:
+                await query.answer("User removed.")
     else:
         await query.answer("Unknown admin action.", show_alert=True)
         return
@@ -1034,9 +1048,16 @@ async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     actor = update.effective_user
+    existing_status = (existing.get("status") or "pending").lower()
     _remove_user_workflow(target_id, actor.id if actor else None, actor.username if actor else None)
     await _notify_user_status(context, target_id, "removed")
-    await update.message.reply_text(
-        f"🗑️ User `{target_id}` removed and all assigned keys were unlinked.",
-        parse_mode="Markdown",
-    )
+    if existing_status == "rejected":
+        await update.message.reply_text(
+            f"♻️ User `{target_id}` unbanned (removed from rejected list).",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            f"🗑️ User `{target_id}` removed and all assigned keys were unlinked.",
+            parse_mode="Markdown",
+        )
