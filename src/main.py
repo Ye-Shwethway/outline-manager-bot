@@ -79,7 +79,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n"
     "- `/backup` Generate and send latest manual backup file (admin/owner)\n"
     "- `/autobackup` Send latest daily auto backup file (admin/owner)\n\n"
-    "- `/users` Show user registration overview (admin/owner)\n"
+    "- `/users` Show user registration overview (admin/owner), including approved-user ban flow\n"
     "- `/approve <user_id>` Approve registered user (admin/owner)\n"
     "- `/reject <user_id>` Reject user (admin/owner)\n"
     "- `/removeuser <user_id>` Remove user from registry and unlink assigned keys, or unban from rejected list (admin/owner)\n"

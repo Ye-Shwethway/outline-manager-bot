@@ -155,6 +155,8 @@ def _user_manage_keyboard(
                 InlineKeyboardButton("⛔ Reject", callback_data=f"uadm_reject_{user_id}_{view_status}"),
             ]
         )
+    if principal_type == "customer" and customer_status == "approved" and can_manage:
+        rows.append([InlineKeyboardButton("⛔ Ban User", callback_data=f"uadm_banconfirm_{user_id}_{view_status}_c")])
     if principal_type == "customer" and can_manage:
         remove_label = "♻️ Unban User" if customer_status == "rejected" else "🗑 Remove User"
         rows.append([InlineKeyboardButton(remove_label, callback_data=f"uadm_rmconfirm_{user_id}_{view_status}_c")])
@@ -175,6 +177,23 @@ def _remove_confirm_keyboard(view_status: str, user_id: int) -> InlineKeyboardMa
             ],
             [
                 InlineKeyboardButton("❎ Cancel", callback_data=f"uadm_rmcancel_{user_id}_{view_status}_c"),
+            ],
+            [
+                InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_manage_{view_status}_{user_id}_c"),
+                InlineKeyboardButton("❎ Close", callback_data="uadm_close_0"),
+            ],
+        ]
+    )
+
+
+def _ban_confirm_keyboard(view_status: str, user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Confirm Ban", callback_data=f"uadm_banyes_{user_id}_{view_status}_c"),
+            ],
+            [
+                InlineKeyboardButton("❎ Cancel", callback_data=f"uadm_bancancel_{user_id}_{view_status}_c"),
             ],
             [
                 InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_manage_{view_status}_{user_id}_c"),
@@ -272,6 +291,26 @@ def _remove_user_workflow(target_id: int, actor_user_id: int | None, actor_usern
 
     queries.clear_user_key_assignments(target_id)
     queries.remove_customer(target_id)
+
+
+def _ban_user_workflow(target_id: int, actor_user_id: int | None, actor_username: str | None):
+    """Ban an approved customer by unlinking all keys and marking status as rejected."""
+    assigned = queries.get_user_assigned_keys(target_id)
+    for item in assigned:
+        alias = item["server_alias"]
+        key_id = str(item["key_id"])
+        queries.set_key_assignment(alias, key_id, None)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="unassigned_user",
+            actor_user_id=actor_user_id,
+            actor_username=actor_username,
+            payload={"banned_user_id": target_id},
+        )
+
+    queries.clear_user_key_assignments(target_id)
+    queries.set_customer_status(target_id, "rejected", approved_by=actor_user_id)
 
 
 async def _notify_registration_reviewers(
@@ -909,12 +948,96 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("Cancelled.")
         return
 
+    if action == "banconfirm":
+        if len(parts) != 5:
+            await query.answer("Invalid ban action.", show_alert=True)
+            return
+        try:
+            target_id = int(parts[2])
+        except ValueError:
+            await query.answer("Invalid user id.", show_alert=True)
+            return
+        view_status = parts[3] if parts[3] in USER_STATUSES else "pending"
+        principal_type = _principal_type_from_token(parts[4])
+        if principal_type != "customer":
+            await query.answer("Staff accounts cannot be banned from /users.", show_alert=True)
+            return
+
+        customer = queries.get_customer(target_id)
+        customer_status = (customer.get("status") or "pending").lower() if customer else "pending"
+        if customer_status != "approved":
+            await query.answer("Only approved users can be banned from this action.", show_alert=True)
+            return
+
+        await query.edit_message_text(
+            (
+                "⚠️ *Confirm User Ban*\n\n"
+                f"Target ID: `{target_id}`\n\n"
+                "This will move the user to rejected, unlink all assigned keys, and block re-registration."
+            ),
+            parse_mode="Markdown",
+            reply_markup=_ban_confirm_keyboard(view_status, target_id),
+        )
+        await query.answer()
+        return
+
+    if action == "bancancel":
+        if len(parts) != 5:
+            await query.answer("Invalid cancel action.", show_alert=True)
+            return
+        try:
+            target_id = int(parts[2])
+        except ValueError:
+            await query.answer("Invalid user id.", show_alert=True)
+            return
+        view_status = parts[3] if parts[3] in USER_STATUSES else "pending"
+        principal_type = _principal_type_from_token(parts[4])
+        customer = queries.get_customer(target_id)
+        if not customer:
+            text, items = _build_users_status_text(view_status)
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=_users_action_keyboard(view_status, items),
+            )
+            await query.answer("User not found.", show_alert=True)
+            return
+
+        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
+        first_name = customer.get("first_name") or "N/A"
+        customer_status = (customer.get("status") or "pending").lower()
+        assigned_count = len(queries.get_user_assigned_keys(target_id))
+        await query.edit_message_text(
+            (
+                "👤 *Manage User*\n\n"
+                f"ID: `{target_id}`\n"
+                f"Username: {uname}\n"
+                f"Name: {first_name}\n"
+                f"Status: *{customer_status.upper()}*\n"
+                f"Assigned Keys: *{assigned_count}*"
+            ),
+            parse_mode="Markdown",
+            reply_markup=_user_manage_keyboard(
+                view_status,
+                target_id,
+                customer_status,
+                principal_type,
+                _can_manage_principal(actor.id, target_id, principal_type),
+            ),
+        )
+        await query.answer("Cancelled.")
+        return
+
     if action in {"approve", "reject"} and len(parts) not in {3, 4}:
         await query.answer("Invalid review action.", show_alert=True)
         return
 
     if action == "rmyes" and len(parts) != 5:
         await query.answer("Invalid remove action.", show_alert=True)
+        return
+
+    if action == "banyes" and len(parts) != 5:
+        await query.answer("Invalid ban action.", show_alert=True)
         return
 
     try:
@@ -958,6 +1081,20 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
                 await query.answer("User unbanned.")
             else:
                 await query.answer("User removed.")
+    elif action == "banyes":
+        if principal_type != "customer":
+            await query.answer("Staff accounts cannot be banned from /users.", show_alert=True)
+            return
+        if not existing:
+            await query.answer("User not found in registry.", show_alert=True)
+        else:
+            current_status = (existing.get("status") or "pending").lower()
+            if current_status != "approved":
+                await query.answer("Only approved users can be banned from this action.", show_alert=True)
+            else:
+                _ban_user_workflow(target_id, actor.id, actor.username)
+                await _notify_user_status(context, target_id, "rejected")
+                await query.answer("User banned.")
     else:
         await query.answer("Unknown admin action.", show_alert=True)
         return
