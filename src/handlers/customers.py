@@ -52,20 +52,50 @@ def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMark
     rows = []
     for item in items[:12]:
         user_id = int(item["user_id"])
-        if status == "pending":
-            rows.append(
-                [
-                    InlineKeyboardButton(f"✅ Approve {user_id}", callback_data=f"uadm_approve_{user_id}"),
-                    InlineKeyboardButton(f"⛔ Reject {user_id}", callback_data=f"uadm_reject_{user_id}"),
-                ]
-            )
         rows.append(
-            [InlineKeyboardButton(f"🗑 Remove {user_id}", callback_data=f"uadm_remove_{user_id}")]
+            [InlineKeyboardButton(f"⚙️ Manage {user_id}", callback_data=f"uadm_manage_{status}_{user_id}")]
         )
 
     # Always keep the status tab row visible, even when there are no users in current view.
     rows.extend(_users_status_keyboard(status).inline_keyboard)
+    rows.append([InlineKeyboardButton("❎ Close", callback_data="uadm_close_0")])
     return InlineKeyboardMarkup(rows)
+
+
+def _user_manage_keyboard(view_status: str, user_id: int, customer_status: str) -> InlineKeyboardMarkup:
+    rows = []
+    if customer_status == "pending":
+        rows.append(
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"uadm_approve_{user_id}_{view_status}"),
+                InlineKeyboardButton("⛔ Reject", callback_data=f"uadm_reject_{user_id}_{view_status}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton("🗑 Remove User", callback_data=f"uadm_rmconfirm_{user_id}_{view_status}")])
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_view_{view_status}"),
+            InlineKeyboardButton("❎ Close", callback_data="uadm_close_0"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _remove_confirm_keyboard(view_status: str, user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Confirm Remove", callback_data=f"uadm_rmyes_{user_id}_{view_status}"),
+            ],
+            [
+                InlineKeyboardButton("❎ Cancel", callback_data=f"uadm_rmcancel_{user_id}_{view_status}"),
+            ],
+            [
+                InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_manage_{view_status}_{user_id}"),
+                InlineKeyboardButton("❎ Close", callback_data="uadm_close_0"),
+            ],
+        ]
+    )
 
 
 def _format_user_line(item: dict) -> str:
@@ -350,16 +380,21 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("❌ Owner/Admin privileges required.", show_alert=True)
         return
 
-    parts = (query.data or "").split("_", 2)
-    if len(parts) != 3:
+    parts = (query.data or "").split("_")
+    if len(parts) < 3:
         await query.answer("Invalid admin action.", show_alert=True)
         return
 
     action = parts[1]
-    payload = parts[2]
     actor = update.effective_user
 
+    if action == "close":
+        await query.answer("Closed.")
+        await query.edit_message_text("✅ User panel closed.")
+        return
+
     if action == "view":
+        payload = parts[2]
         if payload not in USER_STATUSES:
             await query.answer("Invalid status.", show_alert=True)
             return
@@ -372,11 +407,130 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.answer()
         return
 
+    if action == "manage":
+        if len(parts) != 4:
+            await query.answer("Invalid manage action.", show_alert=True)
+            return
+        view_status = parts[2]
+        try:
+            target_id = int(parts[3])
+        except ValueError:
+            await query.answer("Invalid user id.", show_alert=True)
+            return
+
+        customer = queries.get_customer(target_id)
+        if not customer:
+            await query.answer("User not found in registry.", show_alert=True)
+            text, items = _build_users_status_text(view_status if view_status in USER_STATUSES else "pending")
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=_users_action_keyboard(view_status if view_status in USER_STATUSES else "pending", items),
+            )
+            return
+
+        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
+        first_name = customer.get("first_name") or "N/A"
+        customer_status = (customer.get("status") or "pending").lower()
+        assigned_count = len(queries.get_user_assigned_keys(target_id))
+
+        text = (
+            "👤 *Manage User*\n\n"
+            f"ID: `{target_id}`\n"
+            f"Username: {uname}\n"
+            f"Name: {first_name}\n"
+            f"Status: *{customer_status.upper()}*\n"
+            f"Assigned Keys: *{assigned_count}*"
+        )
+        await query.edit_message_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=_user_manage_keyboard(
+                view_status if view_status in USER_STATUSES else "pending",
+                target_id,
+                customer_status,
+            ),
+        )
+        await query.answer()
+        return
+
+    if action == "rmconfirm":
+        if len(parts) != 4:
+            await query.answer("Invalid remove action.", show_alert=True)
+            return
+        try:
+            target_id = int(parts[2])
+        except ValueError:
+            await query.answer("Invalid user id.", show_alert=True)
+            return
+        view_status = parts[3] if parts[3] in USER_STATUSES else "pending"
+        await query.edit_message_text(
+            (
+                "⚠️ *Confirm User Removal*\n\n"
+                f"Target ID: `{target_id}`\n\n"
+                "This will remove the user from registry and unlink all assigned keys."
+            ),
+            parse_mode="Markdown",
+            reply_markup=_remove_confirm_keyboard(view_status, target_id),
+        )
+        await query.answer()
+        return
+
+    if action == "rmcancel":
+        if len(parts) != 4:
+            await query.answer("Invalid cancel action.", show_alert=True)
+            return
+        try:
+            target_id = int(parts[2])
+        except ValueError:
+            await query.answer("Invalid user id.", show_alert=True)
+            return
+        view_status = parts[3] if parts[3] in USER_STATUSES else "pending"
+        customer = queries.get_customer(target_id)
+        if not customer:
+            text, items = _build_users_status_text(view_status)
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=_users_action_keyboard(view_status, items),
+            )
+            await query.answer("User not found.", show_alert=True)
+            return
+
+        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
+        first_name = customer.get("first_name") or "N/A"
+        customer_status = (customer.get("status") or "pending").lower()
+        assigned_count = len(queries.get_user_assigned_keys(target_id))
+        await query.edit_message_text(
+            (
+                "👤 *Manage User*\n\n"
+                f"ID: `{target_id}`\n"
+                f"Username: {uname}\n"
+                f"Name: {first_name}\n"
+                f"Status: *{customer_status.upper()}*\n"
+                f"Assigned Keys: *{assigned_count}*"
+            ),
+            parse_mode="Markdown",
+            reply_markup=_user_manage_keyboard(view_status, target_id, customer_status),
+        )
+        await query.answer("Cancelled.")
+        return
+
+    if action in {"approve", "reject"} and len(parts) not in {3, 4}:
+        await query.answer("Invalid review action.", show_alert=True)
+        return
+
+    if action == "rmyes" and len(parts) != 4:
+        await query.answer("Invalid remove action.", show_alert=True)
+        return
+
     try:
-        target_id = int(payload)
+        target_id = int(parts[2])
     except ValueError:
         await query.answer("Invalid user id.", show_alert=True)
         return
+
+    view_status = parts[3] if len(parts) == 4 and parts[3] in USER_STATUSES else "pending"
 
     existing = queries.get_customer(target_id)
     if action in {"approve", "reject"}:
@@ -393,7 +547,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await _notify_user_status(context, target_id, next_status)
             await query.answer(f"User {next_status}.")
 
-    elif action == "remove":
+    elif action == "rmyes":
         if not existing:
             await query.answer("User not found in registry.", show_alert=True)
         else:
@@ -404,19 +558,11 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("Unknown admin action.", show_alert=True)
         return
 
-    refresh_status = "pending"
-    if query.message:
-        current_text = query.message.text or query.message.caption or ""
-        if "Approved Users" in current_text:
-            refresh_status = "approved"
-        elif "Rejected Users" in current_text:
-            refresh_status = "rejected"
-
-    text, items = _build_users_status_text(refresh_status)
+    text, items = _build_users_status_text(view_status)
     await query.edit_message_text(
         text,
         parse_mode="Markdown",
-        reply_markup=_users_action_keyboard(refresh_status, items),
+        reply_markup=_users_action_keyboard(view_status, items),
     )
 
 

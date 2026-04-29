@@ -162,7 +162,7 @@ def main():
     app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel|assign|unassign)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postsold_(yes|no)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))
-    app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_(view|approve|reject|remove)_"))
+    app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_"))
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)
