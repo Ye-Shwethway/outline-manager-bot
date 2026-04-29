@@ -17,7 +17,7 @@ HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
-    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`\n"
+    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -51,6 +51,7 @@ HELP_TEXT = (
     "- `/users` Show user registration overview (admin/owner)\n"
     "- `/approve <user_id>` Approve registered user (admin/owner)\n"
     "- `/reject <user_id>` Reject user (admin/owner)\n"
+    "- `/removeuser <user_id>` Remove user from registry and unlink assigned keys (admin/owner)\n"
     "- `/register` Submit your user registration request\n"
     "- `/mykeys` Show keys assigned to your account\n\n"
     "*Examples*\n"
@@ -148,6 +149,7 @@ def main():
     app.add_handler(CommandHandler("users", customers.users_overview))
     app.add_handler(CommandHandler("approve", customers.approve_user))
     app.add_handler(CommandHandler("reject", customers.reject_user))
+    app.add_handler(CommandHandler("removeuser", customers.remove_user))
     app.add_handler(CommandHandler("register", customers.register))
     app.add_handler(CommandHandler("mykeys", customers.mykeys))
     
@@ -160,6 +162,7 @@ def main():
     app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel|assign|unassign)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postsold_(yes|no)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))
+    app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_(view|approve|reject|remove)_"))
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)

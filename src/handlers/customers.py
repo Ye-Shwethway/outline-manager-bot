@@ -9,6 +9,7 @@ from src.utils.decorators import admin_only
 from src.utils.datetime_utils import to_yangon_display
 
 logger = logging.getLogger(__name__)
+USER_STATUSES = ["pending", "approved", "rejected"]
 
 
 def _review_recipients() -> list[int]:
@@ -30,6 +31,120 @@ def _registration_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def _users_status_keyboard(selected: str) -> InlineKeyboardMarkup:
+    labels = {
+        "pending": "⏳ Pending",
+        "approved": "✅ Approved",
+        "rejected": "⛔ Rejected",
+    }
+    row = []
+    for status in USER_STATUSES:
+        label = labels[status]
+        if status == selected:
+            label = f"• {label}"
+        row.append(InlineKeyboardButton(label, callback_data=f"uadm_view_{status}"))
+    return InlineKeyboardMarkup([row])
+
+
+def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMarkup | None:
+    if not items:
+        return None
+
+    rows = []
+    for item in items[:12]:
+        user_id = int(item["user_id"])
+        if status == "pending":
+            rows.append(
+                [
+                    InlineKeyboardButton(f"✅ Approve {user_id}", callback_data=f"uadm_approve_{user_id}"),
+                    InlineKeyboardButton(f"⛔ Reject {user_id}", callback_data=f"uadm_reject_{user_id}"),
+                ]
+            )
+        rows.append(
+            [InlineKeyboardButton(f"🗑 Remove {user_id}", callback_data=f"uadm_remove_{user_id}")]
+        )
+
+    rows.extend(_users_status_keyboard(status).inline_keyboard)
+    return InlineKeyboardMarkup(rows)
+
+
+def _format_user_line(item: dict) -> str:
+    user_id = item["user_id"]
+    username = item.get("username")
+    first_name = item.get("first_name") or "N/A"
+    uname = f"@{username}" if username else "(no username)"
+    return f"- ID: `{user_id}` | Username: {uname} | Name: {first_name}"
+
+
+def _build_users_status_text(status: str) -> tuple[str, list[dict]]:
+    pending = queries.get_customers_by_status("pending")
+    approved = queries.get_customers_by_status("approved")
+    rejected = queries.get_customers_by_status("rejected")
+    by_status = {
+        "pending": pending,
+        "approved": approved,
+        "rejected": rejected,
+    }
+    items = by_status[status]
+
+    title_map = {
+        "pending": "⏳ *Pending Users*",
+        "approved": "✅ *Approved Users*",
+        "rejected": "⛔ *Rejected Users*",
+    }
+
+    lines = [
+        "👥 *User Registry*",
+        f"Pending: *{len(pending)}* | Approved: *{len(approved)}* | Rejected: *{len(rejected)}*",
+        "",
+        title_map[status],
+    ]
+
+    if items:
+        lines.extend([_format_user_line(item) for item in items])
+    else:
+        lines.append("- none")
+
+    lines.append("")
+    lines.append("Use inline buttons below to switch status or manage users.")
+    return "\n".join(lines), items
+
+
+async def _notify_user_status(context: ContextTypes.DEFAULT_TYPE, target_id: int, status: str):
+    if status == "approved":
+        text = "✅ Your registration has been approved. You can now use /mykeys."
+    elif status == "rejected":
+        text = "⛔ Your registration was rejected. Contact admin for details."
+    elif status == "removed":
+        text = "🗑️ Your account was removed by admin. Use /register again if you need access."
+    else:
+        return
+
+    try:
+        await context.bot.send_message(chat_id=target_id, text=text)
+    except Exception as e:
+        logger.info(f"Could not notify user {target_id} for status {status}: {e}")
+
+
+def _remove_user_workflow(target_id: int, actor_user_id: int | None, actor_username: str | None):
+    assigned = queries.get_user_assigned_keys(target_id)
+    for item in assigned:
+        alias = item["server_alias"]
+        key_id = str(item["key_id"])
+        queries.set_key_assignment(alias, key_id, None)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="unassigned_user",
+            actor_user_id=actor_user_id,
+            actor_username=actor_username,
+            payload={"removed_user_id": target_id},
+        )
+
+    queries.clear_user_key_assignments(target_id)
+    queries.remove_customer(target_id)
 
 
 async def _notify_registration_reviewers(
@@ -110,12 +225,9 @@ async def handle_registration_review_callback(update: Update, context: ContextTy
             parse_mode="Markdown",
         )
         try:
-            await context.bot.send_message(
-                chat_id=target_id,
-                text="✅ Your registration has been approved. You can now use /mykeys.",
-            )
-        except Exception as e:
-            logger.info(f"Could not notify approved user {target_id}: {e}")
+            await _notify_user_status(context, target_id, "approved")
+        except Exception:
+            pass
         return
 
     if action == "r":
@@ -130,12 +242,9 @@ async def handle_registration_review_callback(update: Update, context: ContextTy
             parse_mode="Markdown",
         )
         try:
-            await context.bot.send_message(
-                chat_id=target_id,
-                text="⛔ Your registration was rejected. Contact admin for details.",
-            )
-        except Exception as e:
-            logger.info(f"Could not notify rejected user {target_id}: {e}")
+            await _notify_user_status(context, target_id, "rejected")
+        except Exception:
+            pass
         return
 
     await query.answer("Unknown action.", show_alert=True)
@@ -220,32 +329,97 @@ async def mykeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def users_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /users - list pending and approved users."""
+    """Command: /users - open status tabs and user management workflow."""
     if not update.message:
         return
 
-    pending = queries.get_customers_by_status("pending")
-    approved = queries.get_customers_by_status("approved")
-    rejected = queries.get_customers_by_status("rejected")
+    status = "pending"
+    text, items = _build_users_status_text(status)
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_users_action_keyboard(status, items),
+    )
 
-    def _fmt(item: dict) -> str:
-        username = item.get("username")
-        uname = f"@{username}" if username else "(no username)"
-        return f"- `{item['user_id']}` {uname}"
 
-    lines = [
-        "👥 *User Registry*",
-        f"Pending: *{len(pending)}* | Approved: *{len(approved)}* | Rejected: *{len(rejected)}*",
-        "",
-        "*Pending:*",
-    ]
+async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline admin workflow for /users status tabs and actions."""
+    query = update.callback_query
+    if not query or not update.effective_user:
+        return
 
-    if pending:
-        lines.extend([_fmt(item) for item in pending[:30]])
+    if not _is_reviewer(update.effective_user.id):
+        await query.answer("❌ Owner/Admin privileges required.", show_alert=True)
+        return
+
+    parts = (query.data or "").split("_", 2)
+    if len(parts) != 3:
+        await query.answer("Invalid admin action.", show_alert=True)
+        return
+
+    action = parts[1]
+    payload = parts[2]
+    actor = update.effective_user
+
+    if action == "view":
+        if payload not in USER_STATUSES:
+            await query.answer("Invalid status.", show_alert=True)
+            return
+        text, items = _build_users_status_text(payload)
+        await query.edit_message_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=_users_action_keyboard(payload, items),
+        )
+        await query.answer()
+        return
+
+    try:
+        target_id = int(payload)
+    except ValueError:
+        await query.answer("Invalid user id.", show_alert=True)
+        return
+
+    existing = queries.get_customer(target_id)
+    if action in {"approve", "reject"}:
+        if not existing:
+            queries.upsert_customer(target_id, None, None, status="pending")
+            existing = queries.get_customer(target_id)
+
+        current_status = (existing.get("status") or "pending").lower() if existing else "pending"
+        if current_status != "pending":
+            await query.answer(f"Already {current_status}.", show_alert=True)
+        else:
+            next_status = "approved" if action == "approve" else "rejected"
+            queries.set_customer_status(target_id, next_status, approved_by=actor.id)
+            await _notify_user_status(context, target_id, next_status)
+            await query.answer(f"User {next_status}.")
+
+    elif action == "remove":
+        if not existing:
+            await query.answer("User not found in registry.", show_alert=True)
+        else:
+            _remove_user_workflow(target_id, actor.id, actor.username)
+            await _notify_user_status(context, target_id, "removed")
+            await query.answer("User removed.")
     else:
-        lines.append("- none")
+        await query.answer("Unknown admin action.", show_alert=True)
+        return
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    refresh_status = "pending"
+    if query.message:
+        current_text = query.message.text or query.message.caption or ""
+        if "Approved Users" in current_text:
+            refresh_status = "approved"
+        elif "Rejected Users" in current_text:
+            refresh_status = "rejected"
+
+    text, items = _build_users_status_text(refresh_status)
+    await query.edit_message_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_users_action_keyboard(refresh_status, items),
+    )
 
 
 @admin_only
@@ -270,6 +444,7 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     actor = update.effective_user
     queries.set_customer_status(target_id, "approved", approved_by=actor.id if actor else None)
+    await _notify_user_status(context, target_id, "approved")
     await update.message.reply_text(f"✅ User `{target_id}` approved.", parse_mode="Markdown")
 
 
@@ -295,4 +470,35 @@ async def reject_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     actor = update.effective_user
     queries.set_customer_status(target_id, "rejected", approved_by=actor.id if actor else None)
+    await _notify_user_status(context, target_id, "rejected")
     await update.message.reply_text(f"⛔ User `{target_id}` rejected.", parse_mode="Markdown")
+
+
+@admin_only
+async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /removeuser <user_id> - remove user and unassign all linked keys."""
+    if not update.message:
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /removeuser <user_id>")
+        return
+
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("User id must be a number.")
+        return
+
+    existing = queries.get_customer(target_id)
+    if not existing:
+        await update.message.reply_text(f"❌ User `{target_id}` not found in registry.", parse_mode="Markdown")
+        return
+
+    actor = update.effective_user
+    _remove_user_workflow(target_id, actor.id if actor else None, actor.username if actor else None)
+    await _notify_user_status(context, target_id, "removed")
+    await update.message.reply_text(
+        f"🗑️ User `{target_id}` removed and all assigned keys were unlinked.",
+        parse_mode="Markdown",
+    )

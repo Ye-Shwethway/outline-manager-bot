@@ -418,6 +418,23 @@ def get_user_assigned_keys(user_id: int) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
+def clear_user_key_assignments(user_id: int):
+    with get_connection() as conn:
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET assigned_user_id = NULL
+            WHERE assigned_user_id = ?
+            ''',
+            (user_id,),
+        )
+
+
+def remove_customer(user_id: int):
+    with get_connection() as conn:
+        conn.execute('DELETE FROM customers WHERE user_id = ?', (user_id,))
+
+
 # --- Phase A: Lifecycle Event Helpers ---
 def add_key_lifecycle_event(
     server_alias: str,
