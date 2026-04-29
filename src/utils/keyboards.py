@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-def get_server_list_keyboard(servers: dict, prefix: str) -> InlineKeyboardMarkup:
+def get_server_list_keyboard(servers: dict, prefix: str, server_labels: dict[str, str] | None = None) -> InlineKeyboardMarkup:
     """
     Generates a keyboard with a list of servers. 
     'prefix' helps us route the callback data (e.g., 'listkeys_vps1' vs 'newkey_vps1').
@@ -8,7 +8,8 @@ def get_server_list_keyboard(servers: dict, prefix: str) -> InlineKeyboardMarkup
     keyboard = []
     for alias in servers.keys():
         # Example callback_data: "newkey_vps1"
-        keyboard.append([InlineKeyboardButton(f"🌐 {alias}", callback_data=f"{prefix}_{alias}")])
+        display = server_labels.get(alias, alias) if server_labels else alias
+        keyboard.append([InlineKeyboardButton(f"🌐 {display}", callback_data=f"{prefix}_{alias}")])
     
     return InlineKeyboardMarkup(keyboard)
 

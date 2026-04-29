@@ -208,8 +208,23 @@ async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No servers configured yet. Owner needs to use /addserver.")
         return
 
+    server_labels = {}
+    for alias, server_data in servers.items():
+        limit = int(server_data.get("max_key_count") or 0)
+        limit_text = str(limit) if limit > 0 else "∞"
+        current_count_text = "?"
+
+        client = get_vpn_client(alias)
+        if client:
+            try:
+                current_count_text = str(len(client.get_keys()))
+            except Exception as e:
+                logger.warning(f"Could not fetch key count for {alias}: {e}")
+
+        server_labels[alias] = f"{alias} - {current_count_text}/{limit_text}"
+
     await close_active_inline_message(update, context)
-    keyboard = get_server_list_keyboard(servers, prefix="listkeys")
+    keyboard = get_server_list_keyboard(servers, prefix="listkeys", server_labels=server_labels)
     sent = await update.message.reply_text("🌐 *Select a server to view its keys:*", reply_markup=keyboard, parse_mode='Markdown')
     set_active_inline_message(context, sent.message_id)
 
@@ -235,8 +250,11 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
         key_creators = queries.get_key_creators(alias)
         server_data = queries.get_server(alias)
         
-        limit_text = f" (Max: {server_data['max_key_count']})" if server_data['max_key_count'] > 0 else " (No Limit)"
-        msg = f"🔑 *Keys for {alias}* {limit_text}:\n\n"
+        max_keys = int(server_data.get('max_key_count') or 0) if server_data else 0
+        current_count = len(keys)
+        ratio_limit = str(max_keys) if max_keys > 0 else "∞"
+        limit_text = f" (Max: {max_keys})" if max_keys > 0 else " (No Limit)"
+        msg = f"🔑 *Keys for {alias}*{limit_text}: Current *{current_count}/{ratio_limit}*\n\n"
         
         if not keys:
             msg += "No keys found on this server."
