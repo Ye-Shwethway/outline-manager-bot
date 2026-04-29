@@ -238,6 +238,27 @@ def get_notification_recipients() -> list[int]:
     return [user_id for user_id in candidates if is_user_notification_enabled(user_id)]
 
 
+def is_admin_registration_review_notifications_enabled() -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT notify_admins_enabled FROM registration_review_settings WHERE id = 1'
+        )
+        row = cursor.fetchone()
+        return bool(row['notify_admins_enabled']) if row else True
+
+
+def set_admin_registration_review_notifications_enabled(is_enabled: bool):
+    with get_connection() as conn:
+        conn.execute(
+            '''
+            INSERT INTO registration_review_settings (id, notify_admins_enabled)
+            VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET notify_admins_enabled = excluded.notify_admins_enabled
+            ''',
+            (is_enabled,),
+        )
+
+
 # --- Phase A: Key Lifecycle and Ownership Helpers ---
 def set_key_expiry(server_alias: str, key_id: str, expiry_at_utc: str | None):
     with get_connection() as conn:

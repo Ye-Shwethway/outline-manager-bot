@@ -166,6 +166,39 @@ async def set_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state_text = "ON" if enabled else "OFF"
     await update.message.reply_text(f"🔔 Your notifications are now *{state_text}*.", parse_mode='Markdown')
 
+
+@owner_only
+async def set_review_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /reviewnoti <on|off> - owner controls if admins receive registration-review alerts."""
+    if len(context.args) != 1:
+        status = "ON" if queries.is_admin_registration_review_notifications_enabled() else "OFF"
+        await update.message.reply_text(
+            (
+                "Usage: `/reviewnoti <on|off>`\n"
+                f"Current admin review notification status: *{status}*\n"
+                "When OFF, only owner receives new `/register` review alerts."
+            ),
+            parse_mode='Markdown',
+        )
+        return
+
+    arg = context.args[0].strip().lower()
+    if arg not in {"on", "off"}:
+        await update.message.reply_text("❌ Invalid option. Use `/reviewnoti on` or `/reviewnoti off`.", parse_mode='Markdown')
+        return
+
+    enabled = arg == "on"
+    queries.set_admin_registration_review_notifications_enabled(enabled)
+    status_text = "ON" if enabled else "OFF"
+    scope_text = "Owner + Admins" if enabled else "Owner only"
+    await update.message.reply_text(
+        (
+            f"📣 Registration-review notifications to admins are now *{status_text}*.\n"
+            f"Current recipients: *{scope_text}*."
+        ),
+        parse_mode='Markdown',
+    )
+
 @admin_only
 async def scan_used_up_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command: /scan - run immediate used-up scan and notify recipients."""

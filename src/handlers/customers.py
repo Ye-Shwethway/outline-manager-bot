@@ -15,7 +15,9 @@ BYTES_PER_GB = 1_000_000_000
 
 
 def _review_recipients() -> list[int]:
-    return sorted(set([OWNER_ID, *queries.get_admins()]))
+    if queries.is_admin_registration_review_notifications_enabled():
+        return sorted(set([OWNER_ID, *queries.get_admins()]))
+    return [OWNER_ID]
 
 
 def _is_reviewer(user_id: int | None) -> bool:

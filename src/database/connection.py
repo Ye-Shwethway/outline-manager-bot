@@ -104,6 +104,15 @@ def init_db():
             )
         ''')
 
+        # 6. Registration review notification routing setting.
+        # When disabled, only OWNER receives /register review alerts.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS registration_review_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                notify_admins_enabled BOOLEAN DEFAULT 1
+            )
+        ''')
+
         # Backward-compatible migration for older DBs missing used_up_notified.
         cursor.execute("PRAGMA table_info(key_metadata)")
         key_metadata_columns = {row[1] for row in cursor.fetchall()}
@@ -138,6 +147,9 @@ def init_db():
         # Ensure settings row always exists.
         cursor.execute(
             "INSERT OR IGNORE INTO notification_settings (id, is_enabled) VALUES (1, 1)"
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO registration_review_settings (id, notify_admins_enabled) VALUES (1, 1)"
         )
 
         # Backfill per-user settings from current owner/admin list, respecting old global switch.
