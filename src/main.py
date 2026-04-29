@@ -2,8 +2,9 @@ import logging
 from datetime import time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-from src.config import BOT_TOKEN
+from src.config import BOT_TOKEN, OWNER_ID
 from src.database.connection import init_db
+from src.database import queries
 from src.services.backup_service import run_auto_backup_job
 from src.services.expiry_service import monitor_expired_keys
 from src.services.notifier import monitor_used_up_keys
@@ -13,7 +14,7 @@ from src.handlers import owner, lists, wizards, customers
 
 logger = logging.getLogger(__name__)
 
-HELP_TEXT = (
+PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
@@ -69,6 +70,21 @@ HELP_TEXT = (
     "- `/manage vps1 7`"
 )
 
+USER_HELP_TEXT = (
+    "🧭 *Outline User Guide*\n\n"
+    "*Available commands for normal users*\n"
+    "- `/start` Show welcome message\n"
+    "- `/help` Show this guide\n"
+    "- `/id` Show your Telegram user id\n"
+    "- `/register` Submit your registration request\n"
+    "- `/mykeys` Show your assigned keys\n\n"
+    "*How to use*\n"
+    "1. Run `/register` once\n"
+    "2. Wait for Owner/Admin approval\n"
+    "3. Run `/mykeys` to view your active key URLs and usage\n\n"
+    "Owner/Admin commands are restricted and cannot be used from normal user accounts."
+)
+
 async def post_init(application):
     """Register periodic background jobs after application startup."""
     if application.job_queue:
@@ -114,7 +130,12 @@ async def id_command(update: Update, context):
 
 async def help_command(update: Update, context):
     """Detailed usage guide for all supported commands."""
-    await update.message.reply_text(HELP_TEXT, parse_mode='Markdown')
+    user = update.effective_user
+    if user and (user.id == OWNER_ID or user.id in queries.get_admins()):
+        await update.message.reply_text(PRIVILEGED_HELP_TEXT, parse_mode='Markdown')
+        return
+
+    await update.message.reply_text(USER_HELP_TEXT, parse_mode='Markdown')
 
 async def global_error_handler(update: object, context):
     """Catch all uncaught handler errors so the bot does not fail silently."""
