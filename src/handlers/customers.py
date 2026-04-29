@@ -49,9 +49,6 @@ def _users_status_keyboard(selected: str) -> InlineKeyboardMarkup:
 
 
 def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMarkup | None:
-    if not items:
-        return None
-
     rows = []
     for item in items[:12]:
         user_id = int(item["user_id"])
@@ -66,6 +63,7 @@ def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMark
             [InlineKeyboardButton(f"🗑 Remove {user_id}", callback_data=f"uadm_remove_{user_id}")]
         )
 
+    # Always keep the status tab row visible, even when there are no users in current view.
     rows.extend(_users_status_keyboard(status).inline_keyboard)
     return InlineKeyboardMarkup(rows)
 
