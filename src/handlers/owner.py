@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.utils.decorators import owner_only, admin_only
@@ -8,6 +9,7 @@ from src.services.backup_service import generate_backup_file, get_latest_backup_
 from src.services.notifier import monitor_used_up_keys
 
 logger = logging.getLogger(__name__)
+REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS = 120
 
 def _strip_outline_label(value: str, label: str) -> str:
     """Accept values copied from access.txt lines such as `apiUrl:...`."""
@@ -15,11 +17,18 @@ def _strip_outline_label(value: str, label: str) -> str:
     return value[len(prefix):].strip() if value.startswith(prefix) else value.strip()
 
 
-async def _notify_admins_review_mode_change(context: ContextTypes.DEFAULT_TYPE, enabled: bool):
+async def _notify_admins_review_mode_change(context: ContextTypes.DEFAULT_TYPE, enabled: bool) -> tuple[bool, int]:
     """Broadcast maintenance/live notice to admins when review notification routing is toggled."""
+    now_ts = int(time.time())
+    last_ts = int(context.application.bot_data.get("review_mode_broadcast_last_ts", 0))
+    elapsed = now_ts - last_ts
+    if elapsed < REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS:
+        return False, REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS - elapsed
+
     admin_ids = queries.get_admins()
     if not admin_ids:
-        return
+        context.application.bot_data["review_mode_broadcast_last_ts"] = now_ts
+        return True, 0
 
     if enabled:
         text = (
@@ -39,6 +48,9 @@ async def _notify_admins_review_mode_change(context: ContextTypes.DEFAULT_TYPE, 
             await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='Markdown')
         except Exception as e:
             logger.info(f"Could not notify admin {admin_id} for review mode change: {e}")
+
+    context.application.bot_data["review_mode_broadcast_last_ts"] = now_ts
+    return True, 0
 
 @owner_only
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -214,14 +226,33 @@ async def set_review_notifications(update: Update, context: ContextTypes.DEFAULT
         return
 
     enabled = arg == "on"
+    current_enabled = queries.is_admin_registration_review_notifications_enabled()
+    if enabled == current_enabled:
+        status_text = "ON" if enabled else "OFF"
+        scope_text = "Owner + Admins" if enabled else "Owner only"
+        await update.message.reply_text(
+            (
+                f"ℹ️ Admin review notifications are already *{status_text}*.\n"
+                f"Current recipients: *{scope_text}*."
+            ),
+            parse_mode='Markdown',
+        )
+        return
+
     queries.set_admin_registration_review_notifications_enabled(enabled)
-    await _notify_admins_review_mode_change(context, enabled)
+    sent, remaining = await _notify_admins_review_mode_change(context, enabled)
     status_text = "ON" if enabled else "OFF"
     scope_text = "Owner + Admins" if enabled else "Owner only"
+    cooldown_note = (
+        ""
+        if sent
+        else f"\nAdmin broadcast skipped due to cooldown. Retry in ~{remaining}s if needed."
+    )
     await update.message.reply_text(
         (
             f"📣 Registration-review notifications to admins are now *{status_text}*.\n"
             f"Current recipients: *{scope_text}*."
+            f"{cooldown_note}"
         ),
         parse_mode='Markdown',
     )
