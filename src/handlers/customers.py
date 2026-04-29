@@ -5,11 +5,13 @@ from telegram.ext import ContextTypes
 
 from src.config import OWNER_ID
 from src.database import queries
+from src.services.outline_api import get_vpn_client
 from src.utils.decorators import admin_only
 from src.utils.datetime_utils import to_yangon_display
 
 logger = logging.getLogger(__name__)
 USER_STATUSES = ["pending", "approved", "rejected"]
+BYTES_PER_GB = 1_000_000_000
 
 
 def _review_recipients() -> list[int]:
@@ -348,13 +350,49 @@ async def mykeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No keys are assigned to your account yet.")
         return
 
+    # Build per-server key snapshots once so users can see live usage/remaining quota.
+    server_key_map: dict[str, dict[str, object]] = {}
+    for alias in sorted({item["server_alias"] for item in items}):
+        client = get_vpn_client(alias)
+        if not client:
+            server_key_map[alias] = {}
+            continue
+        try:
+            keys = client.get_keys()
+            server_key_map[alias] = {str(key.key_id): key for key in keys}
+        except Exception as e:
+            logger.error(f"/mykeys key fetch error on {alias}: {e}")
+            server_key_map[alias] = {}
+
     lines = ["🔑 *Your Assigned Keys*", ""]
     for item in items:
+        alias = item["server_alias"]
+        key_id = str(item["key_id"])
         expiry = to_yangon_display(item.get("expiry_at_utc")) if item.get("expiry_at_utc") else "Not set"
         state = "Expired" if item.get("is_expired") else "Active"
         renew_count = item.get("renew_count") or 0
+
+        live_key = server_key_map.get(alias, {}).get(key_id)
+        if live_key:
+            used_bytes = live_key.used_bytes or 0
+            used_gb = used_bytes / BYTES_PER_GB
+            if live_key.data_limit:
+                limit_bytes = live_key.data_limit
+                limit_gb = limit_bytes / BYTES_PER_GB
+                remaining_gb = max(limit_bytes - used_bytes, 0) / BYTES_PER_GB
+                usage_line = f"Usage: *{used_gb:.2f} GB / {limit_gb:.2f} GB*"
+                remaining_line = f"Remaining: *{remaining_gb:.2f} GB*"
+            else:
+                usage_line = f"Usage: *{used_gb:.2f} GB / Unlimited*"
+                remaining_line = "Remaining: *Unlimited*"
+        else:
+            usage_line = "Usage: *Unavailable right now*"
+            remaining_line = "Remaining: *Unavailable right now*"
+
         lines.append(
-            f"- Server: `{item['server_alias']}` | Key: `{item['key_id']}`\n"
+            f"- Server: `{alias}` | Key: `{key_id}`\n"
+            f"  {usage_line}\n"
+            f"  {remaining_line}\n"
             f"  Expiry: *{expiry}* ({state})\n"
             f"  Renew Count: *{renew_count}*"
         )
