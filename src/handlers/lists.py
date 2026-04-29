@@ -1,5 +1,5 @@
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.utils.decorators import admin_only
 from src.database import queries
@@ -25,6 +25,108 @@ BYTES_PER_GB = 1_000_000_000
 PENDING_DELETE_KEY = "pending_sold_delete"
 PENDING_RENEW_KEY = "pending_renew"
 PENDING_ASSIGN_KEY = "pending_assign"
+
+
+def _umgr_users_keyboard(users: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for item in users[:20]:
+        uid = int(item["user_id"])
+        uname = f"@{item['username']}" if item.get("username") else "(no username)"
+        rows.append([InlineKeyboardButton(f"⚙️ Manage {uid} {uname}", callback_data=f"umgr|user|{uid}")])
+    rows.append([InlineKeyboardButton("❎ Close", callback_data="umgr|close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _umgr_manage_user_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("➕ Assign Key", callback_data=f"umgr|assignsrv|{user_id}")],
+            [InlineKeyboardButton("➖ Unassign Key", callback_data=f"umgr|unassign|{user_id}")],
+            [
+                InlineKeyboardButton("⬅️ Back Users", callback_data="umgr|users"),
+                InlineKeyboardButton("❎ Close", callback_data="umgr|close"),
+            ],
+        ]
+    )
+
+
+def _umgr_assign_servers_keyboard(user_id: int, servers: dict) -> InlineKeyboardMarkup:
+    rows = []
+    for alias in servers.keys():
+        rows.append([InlineKeyboardButton(f"🌐 {alias}", callback_data=f"umgr|srv|{user_id}|{alias}")])
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data=f"umgr|user|{user_id}"),
+            InlineKeyboardButton("❎ Close", callback_data="umgr|close"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _umgr_assign_keys_keyboard(user_id: int, alias: str, keys: list) -> InlineKeyboardMarkup:
+    rows = []
+    for key in keys[:20]:
+        key_name = key.name or "Unnamed"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"🔑 {key.key_id} - {key_name[:24]}",
+                    callback_data=f"umgr|assign|{user_id}|{alias}|{key.key_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back Servers", callback_data=f"umgr|assignsrv|{user_id}"),
+            InlineKeyboardButton("❎ Close", callback_data="umgr|close"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _umgr_unassign_keyboard(user_id: int, assigned: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for item in assigned[:20]:
+        alias = item["server_alias"]
+        key_id = str(item["key_id"])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"➖ {alias} / {key_id}",
+                    callback_data=f"umgr|unas|{user_id}|{alias}|{key_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data=f"umgr|user|{user_id}"),
+            InlineKeyboardButton("❎ Close", callback_data="umgr|close"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_manage_users_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False):
+    approved_users = queries.get_customers_by_status("approved")
+    lines = [
+        "👥 *Manage Approved Users*",
+        f"Total approved users: *{len(approved_users)}*",
+        "",
+    ]
+    if approved_users:
+        lines.append("Select a user to manage key assignment.")
+    else:
+        lines.append("No approved users found.")
+
+    text = "\n".join(lines)
+    kb = _umgr_users_keyboard(approved_users)
+
+    if update.callback_query and edit:
+        await update.callback_query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+    elif update.effective_message:
+        await close_active_inline_message(update, context)
+        sent = await update.effective_message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        set_active_inline_message(context, sent.message_id)
 
 @admin_only
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,9 +215,16 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
 
 @admin_only
 async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /manage <alias> <key_id> - Opens the inline keyboard for a specific key."""
+    """Command: /manage - user-management panel, or /manage <alias> <key_id> for key actions."""
+    if len(context.args) == 0:
+        await _show_manage_users_panel(update, context)
+        return
+
     if len(context.args) != 2:
-        await update.message.reply_text("Usage: `/manage <server_alias> <key_id>`", parse_mode='Markdown')
+        await update.message.reply_text(
+            "Usage: `/manage` for user management or `/manage <server_alias> <key_id>` for key management.",
+            parse_mode='Markdown'
+        )
         return
         
     alias, key_id = context.args
@@ -168,6 +277,189 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode='Markdown'
     )
     set_active_inline_message(context, sent.message_id)
+
+
+@admin_only
+async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline user-manage workflow launched from /manage without args."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    parts = query.data.split("|")
+    if len(parts) < 2 or parts[0] != "umgr":
+        await query.answer("Invalid action.", show_alert=True)
+        return
+
+    action = parts[1]
+
+    if action == "close":
+        await query.answer("Closed.")
+        await query.edit_message_text("✅ Manage panel closed.")
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return
+
+    if action == "users":
+        await query.answer()
+        await _show_manage_users_panel(update, context, edit=True)
+        return
+
+    if action == "user" and len(parts) == 3:
+        await query.answer()
+        user_id = int(parts[2])
+        customer = queries.get_customer(user_id)
+        if not customer or (customer.get("status") or "").lower() != "approved":
+            await query.answer("User is not approved anymore.", show_alert=True)
+            await _show_manage_users_panel(update, context, edit=True)
+            return
+
+        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
+        first_name = customer.get("first_name") or "N/A"
+        assigned = queries.get_user_assigned_keys(user_id)
+        await query.edit_message_text(
+            (
+                "👤 *Manage Approved User*\n\n"
+                f"User ID: `{user_id}`\n"
+                f"Username: {uname}\n"
+                f"Name: {first_name}\n"
+                f"Assigned Keys: *{len(assigned)}*"
+            ),
+            parse_mode='Markdown',
+            reply_markup=_umgr_manage_user_keyboard(user_id),
+        )
+        return
+
+    if action == "assignsrv" and len(parts) == 3:
+        await query.answer()
+        user_id = int(parts[2])
+        servers = queries.get_servers()
+        if not servers:
+            await query.answer("No servers configured.", show_alert=True)
+            return
+        await query.edit_message_text(
+            f"➕ *Assign Key*\n\nChoose a server for user `{user_id}`.",
+            parse_mode='Markdown',
+            reply_markup=_umgr_assign_servers_keyboard(user_id, servers),
+        )
+        return
+
+    if action == "srv" and len(parts) == 4:
+        await query.answer()
+        user_id = int(parts[2])
+        alias = parts[3]
+        client = get_vpn_client(alias)
+        if not client:
+            await query.answer("Could not connect to server.", show_alert=True)
+            return
+        try:
+            keys = client.get_keys()
+        except Exception as e:
+            logger.error(f"User-manage assign key list error on {alias}: {e}")
+            await query.answer("Failed to fetch keys.", show_alert=True)
+            return
+
+        if not keys:
+            await query.answer("No keys found on this server.", show_alert=True)
+            return
+
+        await query.edit_message_text(
+            f"🔑 *Select Key To Assign*\n\nUser ID: `{user_id}`\nServer: `{alias}`",
+            parse_mode='Markdown',
+            reply_markup=_umgr_assign_keys_keyboard(user_id, alias, keys),
+        )
+        return
+
+    if action == "assign" and len(parts) == 5:
+        await query.answer()
+        user_id = int(parts[2])
+        alias = parts[3]
+        key_id = parts[4]
+
+        customer = queries.get_customer(user_id)
+        if not customer or (customer.get("status") or "").lower() != "approved":
+            await query.answer("Target user is not approved.", show_alert=True)
+            return
+
+        queries.set_key_assignment(alias, key_id, user_id)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="assigned_user",
+            actor_user_id=update.effective_user.id if update.effective_user else None,
+            actor_username=update.effective_user.username if update.effective_user else None,
+            payload={"assigned_user_id": user_id, "source": "manage_user_flow"},
+        )
+
+        await query.edit_message_text(
+            (
+                "✅ *Key Assigned*\n\n"
+                f"User ID: `{user_id}`\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`"
+            ),
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Back User", callback_data=f"umgr|user|{user_id}")],
+                 [InlineKeyboardButton("❎ Close", callback_data="umgr|close")]]
+            ),
+        )
+        return
+
+    if action == "unassign" and len(parts) == 3:
+        await query.answer()
+        user_id = int(parts[2])
+        assigned = queries.get_user_assigned_keys(user_id)
+        if not assigned:
+            await query.edit_message_text(
+                f"➖ *Unassign Key*\n\nNo keys currently assigned to user `{user_id}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅️ Back User", callback_data=f"umgr|user|{user_id}")],
+                     [InlineKeyboardButton("❎ Close", callback_data="umgr|close")]]
+                ),
+            )
+            return
+
+        await query.edit_message_text(
+            f"➖ *Unassign Key*\n\nSelect a key to unassign from user `{user_id}`.",
+            parse_mode='Markdown',
+            reply_markup=_umgr_unassign_keyboard(user_id, assigned),
+        )
+        return
+
+    if action == "unas" and len(parts) == 5:
+        await query.answer()
+        user_id = int(parts[2])
+        alias = parts[3]
+        key_id = parts[4]
+
+        queries.set_key_assignment(alias, key_id, None)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="unassigned_user",
+            actor_user_id=update.effective_user.id if update.effective_user else None,
+            actor_username=update.effective_user.username if update.effective_user else None,
+            payload={"assigned_user_id": user_id, "source": "manage_user_flow"},
+        )
+
+        await query.edit_message_text(
+            (
+                "✅ *Key Unassigned*\n\n"
+                f"User ID: `{user_id}`\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`"
+            ),
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Back User", callback_data=f"umgr|user|{user_id}")],
+                 [InlineKeyboardButton("❎ Close", callback_data="umgr|close")]]
+            ),
+        )
+        return
+
+    await query.answer("Unknown manage action.", show_alert=True)
 
 @admin_only
 async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

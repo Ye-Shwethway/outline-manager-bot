@@ -35,6 +35,7 @@ HELP_TEXT = (
     "- `/id` Show your Telegram user id\n"
     "- `/keys` Show servers as inline buttons for key management\n"
     "- `/newkey` Start interactive key creation wizard\n"
+    "- `/manage` Open approved-user management flow (assign/unassign keys)\n"
     "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Renew, Mark Sold, Delete)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
@@ -159,6 +160,7 @@ def main():
     
     # 6. Register Callbacks (Inline Buttons)
     app.add_handler(CallbackQueryHandler(lists.handle_listkeys_callback, pattern="^listkeys_"))
+    app.add_handler(CallbackQueryHandler(lists.handle_user_manage_callback, pattern="^umgr\|"))
     app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel|assign|unassign)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postsold_(yes|no)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))

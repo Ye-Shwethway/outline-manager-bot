@@ -33,6 +33,12 @@ def _registration_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def _manage_user_shortcut_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⚙️ Manage This User", callback_data=f"umgr|user|{user_id}")]]
+    )
+
+
 def _users_status_keyboard(selected: str) -> InlineKeyboardMarkup:
     labels = {
         "pending": "⏳ Pending",
@@ -248,9 +254,10 @@ async def handle_registration_review_callback(update: Update, context: ContextTy
                 "✅ *User Approved via Inline Review*\n\n"
                 f"Target Telegram ID: `{target_id}`\n"
                 f"Reviewed By: @{actor.username or actor.id}\n\n"
-                "Next: assign key via `/manage <alias> <key_id>` -> *Assign User*."
+                "Next: use *Manage This User* below or `/manage` for assignment workflow."
             ),
             parse_mode="Markdown",
+            reply_markup=_manage_user_shortcut_keyboard(target_id),
         )
         try:
             await _notify_user_status(context, target_id, "approved")
@@ -589,7 +596,11 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     actor = update.effective_user
     queries.set_customer_status(target_id, "approved", approved_by=actor.id if actor else None)
     await _notify_user_status(context, target_id, "approved")
-    await update.message.reply_text(f"✅ User `{target_id}` approved.", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"✅ User `{target_id}` approved.",
+        parse_mode="Markdown",
+        reply_markup=_manage_user_shortcut_keyboard(target_id),
+    )
 
 
 @admin_only
