@@ -1,7 +1,7 @@
 import logging
 from datetime import time
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ApplicationHandlerStop
 from src.config import BOT_TOKEN, OWNER_ID
 from src.database.connection import init_db
 from src.database import queries
@@ -13,6 +13,32 @@ from src.services.notifier import monitor_used_up_keys
 from src.handlers import owner, lists, wizards, customers
 
 logger = logging.getLogger(__name__)
+
+OWNER_ONLY_COMMANDS = {
+    "addadmin",
+    "removeadmin",
+    "listadmin",
+    "addserver",
+    "listserver",
+    "deleteserver",
+    "setkeylimit",
+    "reviewnoti",
+}
+
+ADMIN_OWNER_COMMANDS = {
+    "keys",
+    "newkey",
+    "manage",
+    "cancel",
+    "noti",
+    "scan",
+    "backup",
+    "autobackup",
+    "users",
+    "approve",
+    "reject",
+    "removeuser",
+}
 
 PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
@@ -137,6 +163,34 @@ async def help_command(update: Update, context):
 
     await update.message.reply_text(USER_HELP_TEXT, parse_mode='Markdown')
 
+
+async def forbidden_command_guard(update: Update, context):
+    """Blocks privileged commands for non-admin accounts with a single clear response."""
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not message.text:
+        return
+
+    command = message.text.split()[0].lstrip('/').split('@')[0].lower()
+    is_owner = user.id == OWNER_ID
+    is_admin = user.id in queries.get_admins()
+
+    if command in OWNER_ONLY_COMMANDS and not is_owner:
+        await message.reply_text(
+            "❌ This command is restricted to the bot Owner.\n"
+            "Allowed user commands: `/help`, `/register`, `/mykeys`, `/id`.",
+            parse_mode='Markdown',
+        )
+        raise ApplicationHandlerStop
+
+    if command in ADMIN_OWNER_COMMANDS and not (is_owner or is_admin):
+        await message.reply_text(
+            "❌ You do not have permission to use this command.\n"
+            "Allowed user commands: `/help`, `/register`, `/mykeys`, `/id`.",
+            parse_mode='Markdown',
+        )
+        raise ApplicationHandlerStop
+
 async def global_error_handler(update: object, context):
     """Catch all uncaught handler errors so the bot does not fail silently."""
     logger.exception("Unhandled exception while processing update", exc_info=context.error)
@@ -155,6 +209,14 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
 
     # 3. Register Basic Commands
+    app.add_handler(
+        CommandHandler(
+            list(OWNER_ONLY_COMMANDS | ADMIN_OWNER_COMMANDS),
+            forbidden_command_guard,
+            block=False,
+        ),
+        group=-1,
+    )
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("id", id_command))
