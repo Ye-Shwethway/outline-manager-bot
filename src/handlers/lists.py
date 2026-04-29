@@ -4,10 +4,12 @@ from telegram.ext import ContextTypes
 from src.utils.decorators import admin_only
 from src.database import queries
 from src.services.outline_api import get_vpn_client
+from src.utils.datetime_utils import utc_now_iso, add_days_from_utc, to_yangon_display
 from src.utils.keyboards import (
     get_server_list_keyboard,
     get_key_management_keyboard,
     get_delete_confirmation_keyboard,
+    get_expiry_preset_keyboard,
 )
 from src.utils.inline_messages import (
     close_active_inline_message,
@@ -125,12 +127,17 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     sold_keys = queries.get_sold_keys(alias)
     is_sold = str(key_id) in sold_keys
+    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
     used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
     if target_key.data_limit:
         limit_gb = target_key.data_limit / BYTES_PER_GB
         usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
     else:
         usage_line = f"{used_gb:.2f} GB / Unlimited"
+
+    expiry_at_utc = lifecycle.get("expiry_at_utc")
+    expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
+    expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
 
     await close_active_inline_message(update, context)
     keyboard = get_key_management_keyboard(alias, key_id, is_sold)
@@ -140,7 +147,8 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Server: `{alias}`\n"
             f"Key ID: `{target_key.key_id}`\n"
             f"Name: *{target_key.name or 'Unnamed'}*\n"
-            f"Usage: {usage_line}"
+            f"Usage: {usage_line}\n"
+            f"Expiry: *{expiry_line}*"
         ),
         reply_markup=keyboard,
         parse_mode='Markdown'
@@ -335,6 +343,84 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             )
             if query.message:
                 clear_if_matches(context, query.message.message_id)
+
+    elif action == "expiry":
+        lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+        expiry_at_utc = lifecycle.get("expiry_at_utc")
+        expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
+        expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
+
+        await query.edit_message_text(
+            (
+                f"⏳ *Set Expiry*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"Current Expiry: *{expiry_line}*\n\n"
+                "Choose preset duration from now."
+            ),
+            reply_markup=get_expiry_preset_keyboard(alias, key_id),
+            parse_mode='Markdown'
+        )
+
+    elif action in {"expd30", "expd90", "expd180", "expd360"}:
+        day_map = {
+            "expd30": 30,
+            "expd90": 90,
+            "expd180": 180,
+            "expd360": 360,
+        }
+        days = day_map[action]
+        now_utc = utc_now_iso()
+        expiry_at_utc = add_days_from_utc(now_utc, days)
+
+        queries.set_key_expiry(alias, str(key_id), expiry_at_utc)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=str(key_id),
+            event_type="set_expiry",
+            actor_user_id=update.effective_user.id if update.effective_user else None,
+            actor_username=update.effective_user.username if update.effective_user else None,
+            payload={"days": days, "expiry_at_utc": expiry_at_utc},
+        )
+
+        await query.edit_message_text(
+            (
+                "✅ *Expiry Updated*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"Expires At (Yangon): *{to_yangon_display(expiry_at_utc)}*\n"
+                f"Rule Applied: *+{days} days from now*"
+            ),
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+
+    elif action == "expclr":
+        queries.set_key_expiry(alias, str(key_id), None)
+        queries.clear_key_expired(alias, str(key_id))
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=str(key_id),
+            event_type="manual_override",
+            actor_user_id=update.effective_user.id if update.effective_user else None,
+            actor_username=update.effective_user.username if update.effective_user else None,
+            payload={"expiry_cleared": True},
+        )
+        await query.edit_message_text(
+            f"✅ Expiry cleared for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+
+    elif action == "expcancel":
+        await query.edit_message_text(
+            f"✅ Expiry update cancelled for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
             return
 
         client = get_vpn_client(alias)

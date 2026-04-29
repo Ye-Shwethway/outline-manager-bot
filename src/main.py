@@ -5,6 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 from src.config import BOT_TOKEN
 from src.database.connection import init_db
 from src.services.backup_service import run_auto_backup_job
+from src.services.expiry_service import monitor_expired_keys
 from src.services.notifier import monitor_used_up_keys
 
 # Import our handlers
@@ -34,7 +35,7 @@ HELP_TEXT = (
     "- `/id` Show your Telegram user id\n"
     "- `/keys` Show servers as inline buttons for key management\n"
     "- `/newkey` Start interactive key creation wizard\n"
-    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Mark Sold, Delete)\n"
+    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Mark Sold, Delete)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
@@ -66,6 +67,12 @@ async def post_init(application):
             interval=300,
             first=45,
             name="used-up-key-notifier",
+        )
+        application.job_queue.run_repeating(
+            monitor_expired_keys,
+            interval=300,
+            first=75,
+            name="expiry-auto-disable",
         )
         application.job_queue.run_daily(
             run_auto_backup_job,
@@ -135,7 +142,7 @@ def main():
     
     # 6. Register Callbacks (Inline Buttons)
     app.add_handler(CallbackQueryHandler(lists.handle_listkeys_callback, pattern="^listkeys_"))
-    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno)_"))
+    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postsold_(yes|no)_"))
     
     # 7. Register Wizards

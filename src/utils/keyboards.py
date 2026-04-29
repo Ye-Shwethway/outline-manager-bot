@@ -23,6 +23,9 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
             InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")
         ],
         [
+            InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")
+        ],
+        [
             InlineKeyboardButton(sold_text, callback_data=f"toggle_{server_alias}_{key_id}")
         ],
         [
@@ -31,6 +34,27 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
         [
             InlineKeyboardButton("⬅️ Back to Keys", callback_data=f"listkeys_{server_alias}")
         ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_expiry_preset_keyboard(server_alias: str, key_id: str) -> InlineKeyboardMarkup:
+    """Preset-based expiry options from current action time."""
+    keyboard = [
+        [
+            InlineKeyboardButton("+30 days", callback_data=f"expd30_{server_alias}_{key_id}"),
+            InlineKeyboardButton("+90 days", callback_data=f"expd90_{server_alias}_{key_id}"),
+        ],
+        [
+            InlineKeyboardButton("+180 days", callback_data=f"expd180_{server_alias}_{key_id}"),
+            InlineKeyboardButton("+360 days", callback_data=f"expd360_{server_alias}_{key_id}"),
+        ],
+        [
+            InlineKeyboardButton("🧹 Clear Expiry", callback_data=f"expclr_{server_alias}_{key_id}"),
+        ],
+        [
+            InlineKeyboardButton("❎ Cancel", callback_data=f"expcancel_{server_alias}_{key_id}"),
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
