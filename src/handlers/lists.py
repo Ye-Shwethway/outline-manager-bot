@@ -66,12 +66,13 @@ def _umgr_assign_servers_keyboard(user_id: int, servers: dict) -> InlineKeyboard
 def _umgr_assign_keys_keyboard(user_id: int, alias: str, keys: list) -> InlineKeyboardMarkup:
     rows = []
     for key in keys[:20]:
-        key_name = key.name or "Unnamed"
+        key_name = key["name"] or "Unnamed"
+        status_prefix = key["status_prefix"]
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"🔑 {key.key_id} - {key_name[:24]}",
-                    callback_data=f"umgr|assign|{user_id}|{alias}|{key.key_id}",
+                    f"{status_prefix} {key['key_id']} - {key_name[:20]}",
+                    callback_data=f"umgr|assign|{user_id}|{alias}|{key['key_id']}",
                 )
             ]
         )
@@ -363,10 +364,41 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("No keys found on this server.", show_alert=True)
             return
 
+        key_entries = []
+        free_count = 0
+        assigned_count = 0
+        for key in keys:
+            key_id = str(key.key_id)
+            lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
+            assigned_user_id = lifecycle.get("assigned_user_id")
+            if assigned_user_id:
+                status_prefix = "🔒"
+                assigned_count += 1
+            else:
+                status_prefix = "🟢"
+                free_count += 1
+            key_entries.append(
+                {
+                    "key_id": key_id,
+                    "name": key.name,
+                    "assigned_user_id": assigned_user_id,
+                    "status_prefix": status_prefix,
+                }
+            )
+
+        # Show free keys first, then assigned keys for clarity.
+        key_entries.sort(key=lambda x: (x["assigned_user_id"] is not None, str(x["key_id"])))
+
         await query.edit_message_text(
-            f"🔑 *Select Key To Assign*\n\nUser ID: `{user_id}`\nServer: `{alias}`",
+            (
+                "🔑 *Select Key To Assign*\n\n"
+                f"User ID: `{user_id}`\n"
+                f"Server: `{alias}`\n"
+                f"Free: *{free_count}* | Assigned: *{assigned_count}*\n"
+                "Legend: 🟢 free, 🔒 already assigned"
+            ),
             parse_mode='Markdown',
-            reply_markup=_umgr_assign_keys_keyboard(user_id, alias, keys),
+            reply_markup=_umgr_assign_keys_keyboard(user_id, alias, key_entries),
         )
         return
 
