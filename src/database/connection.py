@@ -47,8 +47,44 @@ def init_db():
                 used_up_notified BOOLEAN DEFAULT 0,
                 created_by_user_id INTEGER,
                 created_by_username TEXT,
+                expiry_at_utc TEXT,
+                is_expired BOOLEAN DEFAULT 0,
+                auto_disabled_at_utc TEXT,
+                assigned_user_id INTEGER,
+                renew_count INTEGER DEFAULT 0,
+                last_renewed_at_utc TEXT,
+                last_renewed_quota_gb REAL,
+                created_at_utc TEXT,
                 PRIMARY KEY (server_alias, key_id),
                 FOREIGN KEY (server_alias) REFERENCES servers(alias) ON DELETE CASCADE
+            )
+        ''')
+
+        # 3.1 Customers Table (user role + approval workflow)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS customers (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                status TEXT DEFAULT 'pending',
+                approved_by INTEGER,
+                approved_at_utc TEXT,
+                created_at_utc TEXT,
+                updated_at_utc TEXT
+            )
+        ''')
+
+        # 3.2 Key Lifecycle Events (audit trail)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS key_lifecycle_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_alias TEXT NOT NULL,
+                key_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor_user_id INTEGER,
+                actor_username TEXT,
+                event_payload_json TEXT,
+                created_at_utc TEXT
             )
         ''')
 
@@ -77,6 +113,22 @@ def init_db():
             cursor.execute("ALTER TABLE key_metadata ADD COLUMN created_by_user_id INTEGER")
         if "created_by_username" not in key_metadata_columns:
             cursor.execute("ALTER TABLE key_metadata ADD COLUMN created_by_username TEXT")
+        if "expiry_at_utc" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN expiry_at_utc TEXT")
+        if "is_expired" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN is_expired BOOLEAN DEFAULT 0")
+        if "auto_disabled_at_utc" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN auto_disabled_at_utc TEXT")
+        if "assigned_user_id" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN assigned_user_id INTEGER")
+        if "renew_count" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN renew_count INTEGER DEFAULT 0")
+        if "last_renewed_at_utc" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN last_renewed_at_utc TEXT")
+        if "last_renewed_quota_gb" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN last_renewed_quota_gb REAL")
+        if "created_at_utc" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN created_at_utc TEXT")
 
         cursor.execute("PRAGMA table_info(admins)")
         admins_columns = {row[1] for row in cursor.fetchall()}
@@ -102,6 +154,20 @@ def init_db():
                 "INSERT OR IGNORE INTO user_notification_settings (user_id, is_enabled) VALUES (?, ?)",
                 (user_id, global_enabled),
             )
+
+        # Performance indexes for refinement features.
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_key_metadata_server_key ON key_metadata (server_alias, key_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_key_metadata_assigned_user ON key_metadata (assigned_user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_key_metadata_expiry ON key_metadata (expiry_at_utc, is_expired)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_server_key_time ON key_lifecycle_events (server_alias, key_id, created_at_utc)"
+        )
         
         conn.commit()
         logger.info("Database initialized successfully.")

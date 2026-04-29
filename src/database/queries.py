@@ -1,6 +1,27 @@
 import sqlite3
+import json
+from datetime import datetime, timezone
 from src.config import OWNER_ID
 from src.database.connection import get_connection
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_key_metadata_row(conn, server_alias: str, key_id: str):
+    cursor = conn.execute(
+        'SELECT 1 FROM key_metadata WHERE server_alias = ? AND key_id = ?',
+        (server_alias, key_id),
+    )
+    if not cursor.fetchone():
+        conn.execute(
+            '''
+            INSERT INTO key_metadata (server_alias, key_id, is_sold, used_up_notified, is_expired, renew_count, created_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (server_alias, key_id, False, False, False, 0, _utc_now_iso()),
+        )
 
 # --- Admin Operations ---
 def add_admin(user_id: int, username: str | None = None) -> bool:
@@ -215,3 +236,227 @@ def set_user_notification_enabled(user_id: int, is_enabled: bool):
 def get_notification_recipients() -> list[int]:
     candidates = sorted(set([OWNER_ID, *get_admins()]))
     return [user_id for user_id in candidates if is_user_notification_enabled(user_id)]
+
+
+# --- Phase A: Key Lifecycle and Ownership Helpers ---
+def set_key_expiry(server_alias: str, key_id: str, expiry_at_utc: str | None):
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET expiry_at_utc = ?, is_expired = 0, auto_disabled_at_utc = NULL
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (expiry_at_utc, server_alias, key_id),
+        )
+
+
+def set_key_assignment(server_alias: str, key_id: str, assigned_user_id: int | None):
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET assigned_user_id = ?
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (assigned_user_id, server_alias, key_id),
+        )
+
+
+def mark_key_expired(server_alias: str, key_id: str, auto_disabled_at_utc: str | None = None):
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET is_expired = 1,
+                auto_disabled_at_utc = COALESCE(?, auto_disabled_at_utc)
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (auto_disabled_at_utc or _utc_now_iso(), server_alias, key_id),
+        )
+
+
+def clear_key_expired(server_alias: str, key_id: str):
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET is_expired = 0,
+                auto_disabled_at_utc = NULL
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (server_alias, key_id),
+        )
+
+
+def record_key_renewal(server_alias: str, key_id: str, quota_gb: float | None, renewed_at_utc: str | None = None):
+    ts = renewed_at_utc or _utc_now_iso()
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET renew_count = COALESCE(renew_count, 0) + 1,
+                last_renewed_at_utc = ?,
+                last_renewed_quota_gb = ?,
+                is_expired = 0,
+                auto_disabled_at_utc = NULL
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (ts, quota_gb, server_alias, key_id),
+        )
+
+
+def get_key_lifecycle(server_alias: str, key_id: str) -> dict | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT expiry_at_utc, is_expired, auto_disabled_at_utc, assigned_user_id,
+                   renew_count, last_renewed_at_utc, last_renewed_quota_gb, created_at_utc
+            FROM key_metadata
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (server_alias, key_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_keys_needing_expiry_check(now_utc: str) -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT server_alias, key_id, expiry_at_utc
+            FROM key_metadata
+            WHERE expiry_at_utc IS NOT NULL
+              AND TRIM(expiry_at_utc) != ''
+              AND COALESCE(is_expired, 0) = 0
+              AND expiry_at_utc <= ?
+            ''',
+            (now_utc,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+# --- Phase A: Customer Registration and Approval Helpers ---
+def upsert_customer(user_id: int, username: str | None, first_name: str | None, status: str = 'pending'):
+    now = _utc_now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            '''
+            INSERT INTO customers (user_id, username, first_name, status, created_at_utc, updated_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                first_name = excluded.first_name,
+                status = CASE
+                    WHEN customers.status = 'approved' THEN customers.status
+                    ELSE excluded.status
+                END,
+                updated_at_utc = excluded.updated_at_utc
+            ''',
+            (user_id, username, first_name, status, now, now),
+        )
+
+
+def set_customer_status(user_id: int, status: str, approved_by: int | None = None):
+    now = _utc_now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            '''
+            UPDATE customers
+            SET status = ?,
+                approved_by = ?,
+                approved_at_utc = CASE WHEN ? = 'approved' THEN ? ELSE approved_at_utc END,
+                updated_at_utc = ?
+            WHERE user_id = ?
+            ''',
+            (status, approved_by, status, now, now, user_id),
+        )
+
+
+def get_customer(user_id: int) -> dict | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT user_id, username, first_name, status, approved_by, approved_at_utc, created_at_utc, updated_at_utc FROM customers WHERE user_id = ?',
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_customers_by_status(status: str) -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT user_id, username, first_name, status, approved_by, approved_at_utc, created_at_utc, updated_at_utc
+            FROM customers
+            WHERE status = ?
+            ORDER BY created_at_utc
+            ''',
+            (status,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_user_assigned_keys(user_id: int) -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT server_alias, key_id, expiry_at_utc, is_expired, assigned_user_id,
+                   renew_count, last_renewed_at_utc, last_renewed_quota_gb, created_at_utc
+            FROM key_metadata
+            WHERE assigned_user_id = ?
+            ORDER BY server_alias, key_id
+            ''',
+            (user_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+# --- Phase A: Lifecycle Event Helpers ---
+def add_key_lifecycle_event(
+    server_alias: str,
+    key_id: str,
+    event_type: str,
+    actor_user_id: int | None = None,
+    actor_username: str | None = None,
+    payload: dict | None = None,
+    created_at_utc: str | None = None,
+):
+    with get_connection() as conn:
+        conn.execute(
+            '''
+            INSERT INTO key_lifecycle_events
+            (server_alias, key_id, event_type, actor_user_id, actor_username, event_payload_json, created_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                server_alias,
+                key_id,
+                event_type,
+                actor_user_id,
+                actor_username,
+                json.dumps(payload or {}, ensure_ascii=False),
+                created_at_utc or _utc_now_iso(),
+            ),
+        )
+
+
+def get_key_lifecycle_events(server_alias: str, key_id: str, limit: int = 20) -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT id, server_alias, key_id, event_type, actor_user_id, actor_username, event_payload_json, created_at_utc
+            FROM key_lifecycle_events
+            WHERE server_alias = ? AND key_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            ''',
+            (server_alias, key_id, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
