@@ -385,14 +385,14 @@ async def mykeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 usage_line = f"Usage: *{used_gb:.2f} GB / Unlimited*"
                 remaining_line = "Remaining: *Unlimited*"
-            key_url_line = f"Key URL: `{live_key.access_url}`" if live_key.access_url else "Key URL: *Unavailable right now*"
+            key_url_line = f"🔵 *Key URL:* `{live_key.access_url}`" if live_key.access_url else "🔵 *Key URL:* *Unavailable right now*"
         else:
             usage_line = "Usage: *Unavailable right now*"
             remaining_line = "Remaining: *Unavailable right now*"
-            key_url_line = "Key URL: *Unavailable right now*"
+            key_url_line = "🔵 *Key URL:* *Unavailable right now*"
 
         lines.append(
-            f"- Server: `{alias}` | Key: `{key_id}`\n"
+            f"- Server: `{alias}` | Key ID: `{key_id}`\n"
             f"  {usage_line}\n"
             f"  {remaining_line}\n"
             f"  {key_url_line}\n"
