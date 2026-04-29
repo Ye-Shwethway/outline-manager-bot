@@ -14,6 +14,32 @@ def _strip_outline_label(value: str, label: str) -> str:
     prefix = f"{label}:"
     return value[len(prefix):].strip() if value.startswith(prefix) else value.strip()
 
+
+async def _notify_admins_review_mode_change(context: ContextTypes.DEFAULT_TYPE, enabled: bool):
+    """Broadcast maintenance/live notice to admins when review notification routing is toggled."""
+    admin_ids = queries.get_admins()
+    if not admin_ids:
+        return
+
+    if enabled:
+        text = (
+            "✅ *Bot Back Online*\n\n"
+            "Registration-review workflow is back to normal.\n"
+            "You will receive new user registration review alerts again."
+        )
+    else:
+        text = (
+            "🛠️ *Bot Under Maintenance*\n\n"
+            "Registration-review alerts are temporarily paused for admins.\n"
+            "Owner is refining workflows; alerts will resume when maintenance ends."
+        )
+
+    for admin_id in admin_ids:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='Markdown')
+        except Exception as e:
+            logger.info(f"Could not notify admin {admin_id} for review mode change: {e}")
+
 @owner_only
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
@@ -189,6 +215,7 @@ async def set_review_notifications(update: Update, context: ContextTypes.DEFAULT
 
     enabled = arg == "on"
     queries.set_admin_registration_review_notifications_enabled(enabled)
+    await _notify_admins_review_mode_change(context, enabled)
     status_text = "ON" if enabled else "OFF"
     scope_text = "Owner + Admins" if enabled else "Owner only"
     await update.message.reply_text(
