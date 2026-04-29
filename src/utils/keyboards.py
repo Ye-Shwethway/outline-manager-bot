@@ -39,7 +39,8 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
             InlineKeyboardButton("🗑️ Delete Key", callback_data=f"delete_{server_alias}_{key_id}")
         ],
         [
-            InlineKeyboardButton("⬅️ Back to Keys", callback_data=f"listkeys_{server_alias}")
+            InlineKeyboardButton("⬅️ Back to Keys", callback_data=f"listkeys_{server_alias}"),
+            InlineKeyboardButton("❎ Close", callback_data=f"close_{server_alias}_{key_id}")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)

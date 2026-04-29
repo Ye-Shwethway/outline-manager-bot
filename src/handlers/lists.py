@@ -28,6 +28,73 @@ PENDING_RENEW_KEY = "pending_renew"
 PENDING_ASSIGN_KEY = "pending_assign"
 
 
+async def _render_key_management_panel(
+    query,
+    alias: str,
+    key_id: str,
+    notice: str | None = None,
+):
+    """Renders the current key management panel so admins can chain multiple actions."""
+    client = get_vpn_client(alias)
+    if not client:
+        await query.edit_message_text(
+            f"❌ Could not connect to server `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        keys = client.get_keys()
+    except Exception as e:
+        logger.error(f"Manage key refresh error on {alias}: {e}")
+        await query.edit_message_text(
+            f"❌ Failed to refresh key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+    if not target_key:
+        await query.edit_message_text(
+            f"❌ Key `{key_id}` was not found on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    sold_keys = queries.get_sold_keys(alias)
+    is_sold = str(key_id) in sold_keys
+    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+    used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+    if target_key.data_limit:
+        limit_gb = target_key.data_limit / BYTES_PER_GB
+        usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
+    else:
+        usage_line = f"{used_gb:.2f} GB / Unlimited"
+
+    expiry_at_utc = lifecycle.get("expiry_at_utc")
+    expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
+    expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
+    assigned_user_id = lifecycle.get("assigned_user_id")
+    owner_line = f"{assigned_user_id}" if assigned_user_id else "Unassigned"
+    notice_line = f"{notice}\n\n" if notice else ""
+
+    await query.edit_message_text(
+        (
+            f"{notice_line}"
+            f"⚙️ *Manage Key*\n\n"
+            f"Server: `{alias}`\n"
+            f"Key ID: `{target_key.key_id}`\n"
+            f"Name: *{target_key.name or 'Unnamed'}*\n"
+            f"Usage: {usage_line}\n"
+            f"Expiry: *{expiry_line}*\n"
+            f"Owner User ID: *{owner_line}*\n\n"
+            "Use buttons below to continue, then close manually when done."
+        ),
+        reply_markup=get_key_management_keyboard(alias, key_id, is_sold),
+        parse_mode='Markdown'
+    )
+
+
 def _umgr_users_keyboard(users: list[dict]) -> InlineKeyboardMarkup:
     rows = []
     for item in users[:20]:
@@ -528,19 +595,27 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
     action = data[0]
     alias = data[1]
     key_id = data[2]
+
+    if action == "close":
+        await query.answer("Closed.")
+        await query.edit_message_text(
+            f"✅ Key management panel closed for `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return
     
     if action == "toggle":
         new_status = queries.toggle_key_sold(alias, key_id)
         status_text = "Sold" if new_status else "Available"
         await query.answer(f"Key marked as {status_text}!")
-
-        # Auto-close manage action buttons after a terminal action.
-        await query.edit_message_text(
-            f"✅ Key `{key_id}` on `{alias}` marked as *{status_text}*.",
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice=f"✅ Key marked as *{status_text}*."
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
     elif action == "view":
         client = get_vpn_client(alias)
@@ -611,21 +686,21 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 ),
                 parse_mode='Markdown'
             )
-            await query.edit_message_text(
-                f"✅ View action finished for key `{key_id}` on `{alias}`.",
-                parse_mode='Markdown'
+            await _render_key_management_panel(
+                query,
+                alias,
+                str(key_id),
+                notice="✅ View details sent below."
             )
-            if query.message:
-                clear_if_matches(context, query.message.message_id)
         except Exception as e:
             await query.answer("Failed to fetch key details.", show_alert=True)
             logger.error(f"View key error: {e}")
-            await query.edit_message_text(
-                f"❌ View action failed for key `{key_id}` on `{alias}`.",
-                parse_mode='Markdown'
+            await _render_key_management_panel(
+                query,
+                alias,
+                str(key_id),
+                notice="❌ View action failed."
             )
-            if query.message:
-                clear_if_matches(context, query.message.message_id)
 
     elif action == "delete":
         client = get_vpn_client(alias)
@@ -706,12 +781,12 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
 
     elif action == "delno":
         await query.answer("Delete cancelled.")
-        await query.edit_message_text(
-            f"✅ Delete cancelled for key `{key_id}` on `{alias}`.",
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice="✅ Delete cancelled."
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
     elif action == "delyes":
         sold_keys = queries.get_sold_keys(alias)
@@ -803,18 +878,16 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             payload={"days": days, "expiry_at_utc": expiry_at_utc},
         )
 
-        await query.edit_message_text(
-            (
-                "✅ *Expiry Updated*\n\n"
-                f"Server: `{alias}`\n"
-                f"Key ID: `{key_id}`\n"
-                f"Expires At (Yangon): *{to_yangon_display(expiry_at_utc)}*\n"
-                f"Rule Applied: *+{days} days from now*"
-            ),
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice=(
+                "✅ *Expiry Updated*\n"
+                f"New Expiry (Yangon): *{to_yangon_display(expiry_at_utc)}*\n"
+                f"Applied: *+{days} days from now*"
+            )
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
     elif action == "expclr":
         await query.answer()
@@ -828,21 +901,21 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             actor_username=update.effective_user.username if update.effective_user else None,
             payload={"expiry_cleared": True},
         )
-        await query.edit_message_text(
-            f"✅ Expiry cleared for key `{key_id}` on `{alias}`.",
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice="✅ Expiry cleared."
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
     elif action == "expcancel":
         await query.answer("Cancelled.")
-        await query.edit_message_text(
-            f"✅ Expiry update cancelled for key `{key_id}` on `{alias}`.",
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice="✅ Expiry update cancelled."
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
     elif action == "renew":
         await query.answer()
@@ -896,12 +969,12 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
     elif action == "rncancel":
         await query.answer("Cancelled.")
         context.user_data.pop(PENDING_RENEW_KEY, None)
-        await query.edit_message_text(
-            f"✅ Renew cancelled for key `{key_id}` on `{alias}`.",
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice="✅ Renew cancelled."
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
     elif action == "assign":
         await query.answer()
@@ -935,12 +1008,12 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             actor_username=update.effective_user.username if update.effective_user else None,
             payload={"assigned_user_id": None},
         )
-        await query.edit_message_text(
-            f"✅ User unassigned from key `{key_id}` on `{alias}`.",
-            parse_mode='Markdown'
+        await _render_key_management_panel(
+            query,
+            alias,
+            str(key_id),
+            notice="✅ User unassigned from key."
         )
-        if query.message:
-            clear_if_matches(context, query.message.message_id)
 
 @admin_only
 async def handle_manual_sold_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
