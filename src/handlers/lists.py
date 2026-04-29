@@ -2,6 +2,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.utils.decorators import admin_only
+from src.config import OWNER_ID
 from src.database import queries
 from src.services.outline_api import get_vpn_client
 from src.utils.datetime_utils import utc_now_iso, add_days_from_utc, to_yangon_display
@@ -26,6 +27,18 @@ BYTES_PER_GB = 1_000_000_000
 PENDING_DELETE_KEY = "pending_sold_delete"
 PENDING_RENEW_KEY = "pending_renew"
 PENDING_ASSIGN_KEY = "pending_assign"
+
+
+def _is_privileged_account(user_id: int) -> bool:
+    return user_id == OWNER_ID or user_id in queries.get_admins()
+
+
+def _can_manage_account(actor_user_id: int | None, target_user_id: int) -> bool:
+    if actor_user_id == OWNER_ID:
+        return True
+    if _is_privileged_account(target_user_id):
+        return actor_user_id == target_user_id
+    return True
 
 
 async def _render_key_management_panel(
@@ -399,19 +412,29 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
     if action == "user" and len(parts) == 3:
         await query.answer()
         user_id = int(parts[2])
+        actor_user_id = update.effective_user.id if update.effective_user else None
+        if not _can_manage_account(actor_user_id, user_id):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         customer = queries.get_customer(user_id)
-        if not customer or (customer.get("status") or "").lower() != "approved":
+        is_privileged = _is_privileged_account(user_id)
+        if (not is_privileged) and (not customer or (customer.get("status") or "").lower() != "approved"):
             await query.answer("User is not approved anymore.", show_alert=True)
             await _show_manage_users_panel(update, context, edit=True)
             return
 
-        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
-        first_name = customer.get("first_name") or "N/A"
+        admin_profiles = {int(item["user_id"]): item for item in queries.get_admin_profiles()}
+        username = (customer.get("username") if customer else None) or admin_profiles.get(user_id, {}).get("username")
+        uname = f"@{username}" if username else "(no username)"
+        first_name = (customer.get("first_name") if customer else None) or "N/A"
+        role_line = "👑 OWNER" if user_id == OWNER_ID else "🛡️ ADMIN" if user_id in queries.get_admins() else "👤 APPROVED USER"
         assigned = queries.get_user_assigned_keys(user_id)
         await query.edit_message_text(
             (
                 "👤 *Manage Approved User*\n\n"
                 f"User ID: `{user_id}`\n"
+                f"Role: *{role_line}*\n"
                 f"Username: {uname}\n"
                 f"Name: {first_name}\n"
                 f"Assigned Keys: *{len(assigned)}*"
@@ -424,6 +447,11 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
     if action == "assignsrv" and len(parts) == 3:
         await query.answer()
         user_id = int(parts[2])
+        actor_user_id = update.effective_user.id if update.effective_user else None
+        if not _can_manage_account(actor_user_id, user_id):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         servers = queries.get_servers()
         if not servers:
             await query.answer("No servers configured.", show_alert=True)
@@ -438,6 +466,11 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
     if action == "srv" and len(parts) == 4:
         await query.answer()
         user_id = int(parts[2])
+        actor_user_id = update.effective_user.id if update.effective_user else None
+        if not _can_manage_account(actor_user_id, user_id):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         alias = parts[3]
         client = get_vpn_client(alias)
         if not client:
@@ -514,11 +547,17 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
     if action == "assign" and len(parts) == 5:
         await query.answer()
         user_id = int(parts[2])
+        actor_user_id = update.effective_user.id if update.effective_user else None
+        if not _can_manage_account(actor_user_id, user_id):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         alias = parts[3]
         key_id = parts[4]
 
         customer = queries.get_customer(user_id)
-        if not customer or (customer.get("status") or "").lower() != "approved":
+        is_privileged = _is_privileged_account(user_id)
+        if (not is_privileged) and (not customer or (customer.get("status") or "").lower() != "approved"):
             await query.answer("Target user is not approved.", show_alert=True)
             return
 
@@ -555,6 +594,11 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
     if action == "unassign" and len(parts) == 3:
         await query.answer()
         user_id = int(parts[2])
+        actor_user_id = update.effective_user.id if update.effective_user else None
+        if not _can_manage_account(actor_user_id, user_id):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         assigned = queries.get_user_assigned_keys(user_id)
         if not assigned:
             await query.edit_message_text(
@@ -577,6 +621,11 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
     if action == "unas" and len(parts) == 5:
         await query.answer()
         user_id = int(parts[2])
+        actor_user_id = update.effective_user.id if update.effective_user else None
+        if not _can_manage_account(actor_user_id, user_id):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         alias = parts[3]
         key_id = parts[4]
 

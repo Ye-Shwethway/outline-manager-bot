@@ -10,8 +10,69 @@ from src.utils.decorators import admin_only
 from src.utils.datetime_utils import to_yangon_display
 
 logger = logging.getLogger(__name__)
-USER_STATUSES = ["pending", "approved", "rejected"]
+USER_STATUSES = ["pending", "approved", "rejected", "staff"]
 BYTES_PER_GB = 1_000_000_000
+
+
+def _is_privileged_principal(principal_type: str) -> bool:
+    return principal_type in {"owner", "admin"}
+
+
+def _can_manage_principal(actor_user_id: int, target_user_id: int, principal_type: str) -> bool:
+    if actor_user_id == OWNER_ID:
+        return True
+    if _is_privileged_principal(principal_type):
+        return actor_user_id == target_user_id
+    return True
+
+
+def _principal_type_token(principal_type: str) -> str:
+    token_map = {"customer": "c", "owner": "o", "admin": "a"}
+    return token_map.get(principal_type, "c")
+
+
+def _principal_type_from_token(token: str | None) -> str:
+    token_map = {"c": "customer", "o": "owner", "a": "admin"}
+    return token_map.get(token or "", "customer")
+
+
+def _resolve_principal_type(target_id: int) -> str:
+    if target_id == OWNER_ID:
+        return "owner"
+    if target_id in queries.get_admins():
+        return "admin"
+    return "customer"
+
+
+def _build_staff_items() -> list[dict]:
+    customers_by_id = {
+        int(item["user_id"]): item
+        for item in (
+            queries.get_customers_by_status("pending")
+            + queries.get_customers_by_status("approved")
+            + queries.get_customers_by_status("rejected")
+        )
+    }
+    admin_profiles = {int(item["user_id"]): item for item in queries.get_admin_profiles()}
+    staff_ids = [OWNER_ID] + [uid for uid in sorted(admin_profiles.keys()) if uid != OWNER_ID]
+
+    items: list[dict] = []
+    for user_id in staff_ids:
+        customer = customers_by_id.get(user_id, {})
+        admin_profile = admin_profiles.get(user_id, {})
+        username = customer.get("username") or admin_profile.get("username")
+        first_name = customer.get("first_name") or "N/A"
+        principal_type = "owner" if user_id == OWNER_ID else "admin"
+        items.append(
+            {
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+                "status": "staff",
+                "principal_type": principal_type,
+            }
+        )
+    return items
 
 
 def _review_recipients() -> list[int]:
@@ -23,7 +84,7 @@ def _review_recipients() -> list[int]:
 def _is_reviewer(user_id: int | None) -> bool:
     if not user_id:
         return False
-    return user_id in _review_recipients()
+    return user_id == OWNER_ID or user_id in queries.get_admins()
 
 
 def _registration_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -48,6 +109,7 @@ def _users_status_keyboard(selected: str) -> InlineKeyboardMarkup:
         "pending": "⏳ Pending",
         "approved": "✅ Approved",
         "rejected": "⛔ Rejected",
+        "staff": "🛡️ Staff",
     }
     row = []
     for status in USER_STATUSES:
@@ -62,8 +124,11 @@ def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMark
     rows = []
     for item in items[:12]:
         user_id = int(item["user_id"])
+        principal_type = item.get("principal_type", "customer")
+        role_tag = "👑" if principal_type == "owner" else "🛡️" if principal_type == "admin" else ""
+        ptoken = _principal_type_token(principal_type)
         rows.append(
-            [InlineKeyboardButton(f"⚙️ Manage {user_id}", callback_data=f"uadm_manage_{status}_{user_id}")]
+            [InlineKeyboardButton(f"⚙️ Manage {user_id} {role_tag}".strip(), callback_data=f"uadm_manage_{status}_{user_id}_{ptoken}")]
         )
 
     # Always keep the status tab row visible, even when there are no users in current view.
@@ -72,16 +137,26 @@ def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMark
     return InlineKeyboardMarkup(rows)
 
 
-def _user_manage_keyboard(view_status: str, user_id: int, customer_status: str) -> InlineKeyboardMarkup:
+def _user_manage_keyboard(
+    view_status: str,
+    user_id: int,
+    customer_status: str,
+    principal_type: str,
+    can_manage: bool,
+) -> InlineKeyboardMarkup:
     rows = []
-    if customer_status == "pending":
+    if can_manage:
+        rows.append([InlineKeyboardButton("🗝️ Manage Assigned Keys", callback_data=f"umgr|user|{user_id}")])
+
+    if principal_type == "customer" and customer_status == "pending":
         rows.append(
             [
                 InlineKeyboardButton("✅ Approve", callback_data=f"uadm_approve_{user_id}_{view_status}"),
                 InlineKeyboardButton("⛔ Reject", callback_data=f"uadm_reject_{user_id}_{view_status}"),
             ]
         )
-    rows.append([InlineKeyboardButton("🗑 Remove User", callback_data=f"uadm_rmconfirm_{user_id}_{view_status}")])
+    if principal_type == "customer" and can_manage:
+        rows.append([InlineKeyboardButton("🗑 Remove User", callback_data=f"uadm_rmconfirm_{user_id}_{view_status}_c")])
     rows.append(
         [
             InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_view_{view_status}"),
@@ -95,13 +170,13 @@ def _remove_confirm_keyboard(view_status: str, user_id: int) -> InlineKeyboardMa
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ Confirm Remove", callback_data=f"uadm_rmyes_{user_id}_{view_status}"),
+                InlineKeyboardButton("✅ Confirm Remove", callback_data=f"uadm_rmyes_{user_id}_{view_status}_c"),
             ],
             [
-                InlineKeyboardButton("❎ Cancel", callback_data=f"uadm_rmcancel_{user_id}_{view_status}"),
+                InlineKeyboardButton("❎ Cancel", callback_data=f"uadm_rmcancel_{user_id}_{view_status}_c"),
             ],
             [
-                InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_manage_{view_status}_{user_id}"),
+                InlineKeyboardButton("⬅️ Back", callback_data=f"uadm_manage_{view_status}_{user_id}_c"),
                 InlineKeyboardButton("❎ Close", callback_data="uadm_close_0"),
             ],
         ]
@@ -112,18 +187,30 @@ def _format_user_line(item: dict) -> str:
     user_id = item["user_id"]
     username = item.get("username")
     first_name = item.get("first_name") or "N/A"
+    principal_type = item.get("principal_type", "customer")
+    role_text = "👑 OWNER" if principal_type == "owner" else "🛡️ ADMIN" if principal_type == "admin" else "👤 USER"
     uname = f"@{username}" if username else "(no username)"
-    return f"- ID: `{user_id}` | Username: {uname} | Name: {first_name}"
+    return f"- {role_text} | ID: `{user_id}` | Username: {uname} | Name: {first_name}"
 
 
 def _build_users_status_text(status: str) -> tuple[str, list[dict]]:
     pending = queries.get_customers_by_status("pending")
     approved = queries.get_customers_by_status("approved")
     rejected = queries.get_customers_by_status("rejected")
+    staff = _build_staff_items()
+
+    for item in pending:
+        item["principal_type"] = "customer"
+    for item in approved:
+        item["principal_type"] = "customer"
+    for item in rejected:
+        item["principal_type"] = "customer"
+
     by_status = {
         "pending": pending,
         "approved": approved,
         "rejected": rejected,
+        "staff": staff,
     }
     items = by_status[status]
 
@@ -131,11 +218,12 @@ def _build_users_status_text(status: str) -> tuple[str, list[dict]]:
         "pending": "⏳ *Pending Users*",
         "approved": "✅ *Approved Users*",
         "rejected": "⛔ *Rejected Users*",
+        "staff": "🛡️ *Owner and Admins*",
     }
 
     lines = [
         "👥 *User Registry*",
-        f"Pending: *{len(pending)}* | Approved: *{len(approved)}* | Rejected: *{len(rejected)}*",
+        f"Pending: *{len(pending)}* | Approved: *{len(approved)}* | Rejected: *{len(rejected)}* | Staff: *{len(staff)}*",
         "",
         title_map[status],
     ]
@@ -472,7 +560,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         return
 
     if action == "manage":
-        if len(parts) != 4:
+        if len(parts) not in {4, 5}:
             await query.answer("Invalid manage action.", show_alert=True)
             return
         view_status = parts[2]
@@ -482,8 +570,13 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("Invalid user id.", show_alert=True)
             return
 
+        principal_type = _principal_type_from_token(parts[4]) if len(parts) == 5 else _resolve_principal_type(target_id)
+        if not _can_manage_principal(actor.id, target_id, principal_type):
+            await query.answer("You can only manage your own staff account.", show_alert=True)
+            return
+
         customer = queries.get_customer(target_id)
-        if not customer:
+        if principal_type == "customer" and not customer:
             await query.answer("User not found in registry.", show_alert=True)
             text, items = _build_users_status_text(view_status if view_status in USER_STATUSES else "pending")
             await query.edit_message_text(
@@ -493,14 +586,28 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             )
             return
 
-        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
-        first_name = customer.get("first_name") or "N/A"
-        customer_status = (customer.get("status") or "pending").lower()
+        if principal_type == "customer":
+            username = customer.get("username") if customer else None
+            first_name = customer.get("first_name") if customer else None
+            customer_status = (customer.get("status") or "pending").lower() if customer else "pending"
+            role_line = "👤 USER"
+        else:
+            admin_map = {int(item["user_id"]): item for item in queries.get_admin_profiles()}
+            profile = admin_map.get(target_id, {})
+            username = (customer.get("username") if customer else None) or profile.get("username")
+            first_name = (customer.get("first_name") if customer else None) or "N/A"
+            customer_status = "staff"
+            role_line = "👑 OWNER" if principal_type == "owner" else "🛡️ ADMIN"
+
+        uname = f"@{username}" if username else "(no username)"
+        first_name = first_name or "N/A"
         assigned_count = len(queries.get_user_assigned_keys(target_id))
+        can_manage = _can_manage_principal(actor.id, target_id, principal_type)
 
         text = (
             "👤 *Manage User*\n\n"
             f"ID: `{target_id}`\n"
+            f"Role: *{role_line}*\n"
             f"Username: {uname}\n"
             f"Name: {first_name}\n"
             f"Status: *{customer_status.upper()}*\n"
@@ -513,13 +620,15 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
                 view_status if view_status in USER_STATUSES else "pending",
                 target_id,
                 customer_status,
+                principal_type,
+                can_manage,
             ),
         )
         await query.answer()
         return
 
     if action == "rmconfirm":
-        if len(parts) != 4:
+        if len(parts) != 5:
             await query.answer("Invalid remove action.", show_alert=True)
             return
         try:
@@ -528,6 +637,10 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("Invalid user id.", show_alert=True)
             return
         view_status = parts[3] if parts[3] in USER_STATUSES else "pending"
+        principal_type = _principal_type_from_token(parts[4])
+        if principal_type != "customer":
+            await query.answer("Staff accounts cannot be removed from /users.", show_alert=True)
+            return
         await query.edit_message_text(
             (
                 "⚠️ *Confirm User Removal*\n\n"
@@ -541,7 +654,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         return
 
     if action == "rmcancel":
-        if len(parts) != 4:
+        if len(parts) != 5:
             await query.answer("Invalid cancel action.", show_alert=True)
             return
         try:
@@ -550,6 +663,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("Invalid user id.", show_alert=True)
             return
         view_status = parts[3] if parts[3] in USER_STATUSES else "pending"
+        principal_type = _principal_type_from_token(parts[4])
         customer = queries.get_customer(target_id)
         if not customer:
             text, items = _build_users_status_text(view_status)
@@ -575,7 +689,13 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
                 f"Assigned Keys: *{assigned_count}*"
             ),
             parse_mode="Markdown",
-            reply_markup=_user_manage_keyboard(view_status, target_id, customer_status),
+            reply_markup=_user_manage_keyboard(
+                view_status,
+                target_id,
+                customer_status,
+                principal_type,
+                _can_manage_principal(actor.id, target_id, principal_type),
+            ),
         )
         await query.answer("Cancelled.")
         return
@@ -584,7 +704,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("Invalid review action.", show_alert=True)
         return
 
-    if action == "rmyes" and len(parts) != 4:
+    if action == "rmyes" and len(parts) != 5:
         await query.answer("Invalid remove action.", show_alert=True)
         return
 
@@ -594,10 +714,14 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("Invalid user id.", show_alert=True)
         return
 
-    view_status = parts[3] if len(parts) == 4 and parts[3] in USER_STATUSES else "pending"
+    view_status = parts[3] if len(parts) >= 4 and parts[3] in USER_STATUSES else "pending"
+    principal_type = _principal_type_from_token(parts[4]) if len(parts) == 5 else _resolve_principal_type(target_id)
 
     existing = queries.get_customer(target_id)
     if action in {"approve", "reject"}:
+        if principal_type != "customer":
+            await query.answer("Staff accounts cannot be approved/rejected.", show_alert=True)
+            return
         if not existing:
             queries.upsert_customer(target_id, None, None, status="pending")
             existing = queries.get_customer(target_id)
@@ -612,6 +736,9 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await query.answer(f"User {next_status}.")
 
     elif action == "rmyes":
+        if principal_type != "customer":
+            await query.answer("Staff accounts cannot be removed from /users.", show_alert=True)
+            return
         if not existing:
             await query.answer("User not found in registry.", show_alert=True)
         else:
