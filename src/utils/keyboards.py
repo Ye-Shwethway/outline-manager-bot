@@ -12,7 +12,12 @@ def get_server_list_keyboard(servers: dict, prefix: str) -> InlineKeyboardMarkup
     
     return InlineKeyboardMarkup(keyboard)
 
-def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -> InlineKeyboardMarkup:
+def get_key_management_keyboard(
+    server_alias: str,
+    key_id: str,
+    is_sold: bool,
+    can_renew: bool,
+) -> InlineKeyboardMarkup:
     """
     Generates the management buttons for a specific key.
     """
@@ -24,9 +29,6 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
         ],
         [
             InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")
-        ],
-        [
-            InlineKeyboardButton("🔄 Renew", callback_data=f"renew_{server_alias}_{key_id}")
         ],
         [
             InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
@@ -43,6 +45,11 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
             InlineKeyboardButton("❎ Close", callback_data=f"close_{server_alias}_{key_id}")
         ]
     ]
+    if can_renew:
+        keyboard.insert(
+            2,
+            [InlineKeyboardButton("🔄 Renew", callback_data=f"renew_{server_alias}_{key_id}")],
+        )
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -106,22 +113,27 @@ def get_post_create_key_entry_keyboard(server_alias: str, key_id: str) -> Inline
     )
 
 
-def get_post_create_manage_keyboard(server_alias: str, key_id: str, is_sold: bool) -> InlineKeyboardMarkup:
+def get_post_create_manage_keyboard(
+    server_alias: str,
+    key_id: str,
+    is_sold: bool,
+    can_renew: bool,
+) -> InlineKeyboardMarkup:
     """Second post-create step: full key actions for the newly created key."""
     sold_text = "🟢 Keep Available" if is_sold else "🔴 Mark Sold"
-    return InlineKeyboardMarkup(
+    keyboard = [
+        [InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")],
+        [InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")],
         [
-            [InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")],
-            [InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")],
-            [InlineKeyboardButton("🔄 Renew", callback_data=f"renew_{server_alias}_{key_id}")],
-            [
-                InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
-                InlineKeyboardButton("🚫 Unassign", callback_data=f"unassign_{server_alias}_{key_id}"),
-            ],
-            [InlineKeyboardButton(sold_text, callback_data=f"toggle_{server_alias}_{key_id}")],
-            [
-                InlineKeyboardButton("⬅️ Back", callback_data=f"postkey_back_{server_alias}_{key_id}"),
-                InlineKeyboardButton("✅ Close", callback_data=f"postkey_close_{server_alias}_{key_id}"),
-            ],
-        ]
-    )
+            InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
+            InlineKeyboardButton("🚫 Unassign", callback_data=f"unassign_{server_alias}_{key_id}"),
+        ],
+        [InlineKeyboardButton(sold_text, callback_data=f"toggle_{server_alias}_{key_id}")],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data=f"postkey_back_{server_alias}_{key_id}"),
+            InlineKeyboardButton("✅ Close", callback_data=f"postkey_close_{server_alias}_{key_id}"),
+        ],
+    ]
+    if can_renew:
+        keyboard.insert(2, [InlineKeyboardButton("🔄 Renew", callback_data=f"renew_{server_alias}_{key_id}")])
+    return InlineKeyboardMarkup(keyboard)

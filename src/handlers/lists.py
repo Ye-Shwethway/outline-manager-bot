@@ -72,6 +72,7 @@ async def _render_key_management_panel(
         usage_line = f"{used_gb:.2f} GB / Unlimited"
 
     expiry_at_utc = lifecycle.get("expiry_at_utc")
+    can_renew = bool(expiry_at_utc)
     expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
     expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
     assigned_user_id = lifecycle.get("assigned_user_id")
@@ -90,7 +91,7 @@ async def _render_key_management_panel(
             f"Owner User ID: *{owner_line}*\n\n"
             "Use buttons below to continue, then close manually when done."
         ),
-        reply_markup=get_key_management_keyboard(alias, key_id, is_sold),
+        reply_markup=get_key_management_keyboard(alias, key_id, is_sold, can_renew),
         parse_mode='Markdown'
     )
 
@@ -333,7 +334,8 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     owner_line = f"{assigned_user_id}" if assigned_user_id else "Unassigned"
 
     await close_active_inline_message(update, context)
-    keyboard = get_key_management_keyboard(alias, key_id, is_sold)
+    can_renew = bool(expiry_at_utc)
+    keyboard = get_key_management_keyboard(alias, key_id, is_sold, can_renew)
     sent = await update.message.reply_text(
         (
             f"⚙️ *Manage Key*\n\n"
@@ -921,6 +923,15 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         await query.answer()
         lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
         expiry_at_utc = lifecycle.get("expiry_at_utc")
+        if not expiry_at_utc:
+            await query.answer("Set expiry first, then renew.", show_alert=True)
+            await _render_key_management_panel(
+                query,
+                alias,
+                str(key_id),
+                notice="⚠️ Renew is disabled until expiry is set."
+            )
+            return
         current_expiry = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
         await query.edit_message_text(
             (

@@ -168,6 +168,8 @@ async def handle_post_create_sold_callback(update: Update, context: ContextTypes
     if action == "open":
         sold_keys = queries.get_sold_keys(alias)
         is_sold = str(key_id) in sold_keys
+        lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+        can_renew = bool(lifecycle.get("expiry_at_utc"))
         await query.edit_message_text(
             (
                 "⚙️ *New Key Setup Panel*\n\n"
@@ -176,7 +178,7 @@ async def handle_post_create_sold_callback(update: Update, context: ContextTypes
                 "Choose an action for this key."
             ),
             parse_mode='Markdown',
-            reply_markup=get_post_create_manage_keyboard(alias, str(key_id), is_sold),
+            reply_markup=get_post_create_manage_keyboard(alias, str(key_id), is_sold, can_renew),
         )
         return
 
