@@ -4,7 +4,11 @@ from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, Call
 from src.utils.decorators import admin_only
 from src.database import queries
 from src.services.outline_api import get_vpn_client
-from src.utils.keyboards import get_server_list_keyboard, get_post_create_sold_keyboard
+from src.utils.keyboards import (
+    get_server_list_keyboard,
+    get_post_create_key_entry_keyboard,
+    get_post_create_manage_keyboard,
+)
 from src.utils.inline_messages import (
     close_active_inline_message,
     set_active_inline_message,
@@ -134,8 +138,8 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode='Markdown')
         await update.message.reply_text(
-            "Mark this newly generated key as sold now?",
-            reply_markup=get_post_create_sold_keyboard(alias, str(new_key.key_id)),
+            "Open key management panel for this newly created key?",
+            reply_markup=get_post_create_key_entry_keyboard(alias, str(new_key.key_id)),
         )
     except Exception as e:
         logger.error(f"Error creating key: {e}")
@@ -153,26 +157,44 @@ async def cancel_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def handle_post_create_sold_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles post-creation sold decision without touching the key info message above."""
+    """Handles post-create manage panel open/back/close actions."""
     query = update.callback_query
     await query.answer()
 
-    payload = query.data[len("postsold_"):]
-    decision, _, remainder = payload.partition("_")
+    payload = query.data[len("postkey_"):]
+    action, _, remainder = payload.partition("_")
     alias, _, key_id = remainder.rpartition("_")
 
-    if decision == "yes":
-        queries.set_key_sold(alias, key_id, True)
+    if action == "open":
+        sold_keys = queries.get_sold_keys(alias)
+        is_sold = str(key_id) in sold_keys
         await query.edit_message_text(
-            f"✅ Key `{key_id}` on `{alias}` is now marked as *SOLD*.",
+            (
+                "⚙️ *New Key Setup Panel*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n\n"
+                "Choose an action for this key."
+            ),
+            parse_mode='Markdown',
+            reply_markup=get_post_create_manage_keyboard(alias, str(key_id), is_sold),
+        )
+        return
+
+    if action == "back":
+        await query.edit_message_text(
+            "Open key management panel for this newly created key?",
+            reply_markup=get_post_create_key_entry_keyboard(alias, str(key_id)),
+        )
+        return
+
+    if action == "close":
+        await query.edit_message_text(
+            f"✅ New key setup panel closed for key `{key_id}` on `{alias}`.",
             parse_mode='Markdown'
         )
-    else:
-        queries.set_key_sold(alias, key_id, False)
-        await query.edit_message_text(
-            f"✅ Key `{key_id}` on `{alias}` remains *AVAILABLE*.",
-            parse_mode='Markdown'
-        )
+        return
+
+    await query.answer("Unknown action.", show_alert=True)
 
 # Build the Conversation Handler to be imported by main.py
 newkey_conv_handler = ConversationHandler(

@@ -95,14 +95,32 @@ def get_delete_confirmation_keyboard(server_alias: str, key_id: str) -> InlineKe
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_post_create_sold_keyboard(server_alias: str, key_id: str) -> InlineKeyboardMarkup:
-    """Keyboard shown after key creation to quickly mark it sold or keep available."""
-    keyboard = [
+def get_post_create_key_entry_keyboard(server_alias: str, key_id: str) -> InlineKeyboardMarkup:
+    """First post-create step: single entry button to open full key management panel."""
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("✅ Mark Sold", callback_data=f"postsold_yes_{server_alias}_{key_id}")
-        ],
+            [InlineKeyboardButton("⚙️ Manage This Key", callback_data=f"postkey_open_{server_alias}_{key_id}")],
+            [InlineKeyboardButton("❎ Close", callback_data=f"postkey_close_{server_alias}_{key_id}")],
+        ]
+    )
+
+
+def get_post_create_manage_keyboard(server_alias: str, key_id: str, is_sold: bool) -> InlineKeyboardMarkup:
+    """Second post-create step: full key actions for the newly created key."""
+    sold_text = "🟢 Keep Available" if is_sold else "🔴 Mark Sold"
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("➡️ Keep Available", callback_data=f"postsold_no_{server_alias}_{key_id}")
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+            [InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")],
+            [InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")],
+            [InlineKeyboardButton("🔄 Renew", callback_data=f"renew_{server_alias}_{key_id}")],
+            [
+                InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
+                InlineKeyboardButton("🚫 Unassign", callback_data=f"unassign_{server_alias}_{key_id}"),
+            ],
+            [InlineKeyboardButton(sold_text, callback_data=f"toggle_{server_alias}_{key_id}")],
+            [
+                InlineKeyboardButton("⬅️ Back", callback_data=f"postkey_back_{server_alias}_{key_id}"),
+                InlineKeyboardButton("✅ Close", callback_data=f"postkey_close_{server_alias}_{key_id}"),
+            ],
+        ]
+    )
