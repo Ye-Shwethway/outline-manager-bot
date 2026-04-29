@@ -62,7 +62,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/help` Show this guide\n"
     "- `/id` Show your Telegram user id\n"
     "- `/keys` Show servers as inline buttons for key management\n"
-    "- `/search <owner_user_id|owner_username|name>` Search users and list assigned keys across servers\n"
+    "- `/search <owner_user_id|owner_username|key_name>` Search owners by id/username or assigned key name across servers\n"
     "- `/newkey` Start interactive key creation wizard\n"
     "- `/manage` Open approved-user management flow (assign/unassign keys)\n"
     "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Renew, Mark Sold, Delete)\n"

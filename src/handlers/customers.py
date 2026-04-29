@@ -567,27 +567,84 @@ def _principal_matches_query(principal: dict, q: str) -> bool:
     return q in user_id or q in username or q in first_name
 
 
+def _collect_assigned_key_records() -> list[dict]:
+    """Collects live assigned key records including key names for /search key-name matching."""
+    records: list[dict] = []
+    servers = queries.get_servers()
+
+    for alias in sorted(servers.keys()):
+        client = get_vpn_client(alias)
+        if not client:
+            continue
+
+        try:
+            keys = client.get_keys()
+        except Exception as e:
+            logger.warning(f"Search key fetch failed on {alias}: {e}")
+            continue
+
+        for key in keys:
+            key_id = str(key.key_id)
+            lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
+            assigned_user_id = lifecycle.get("assigned_user_id")
+            if not assigned_user_id:
+                continue
+
+            try:
+                owner_user_id = int(assigned_user_id)
+            except (TypeError, ValueError):
+                continue
+
+            records.append(
+                {
+                    "user_id": owner_user_id,
+                    "server_alias": alias,
+                    "key_id": key_id,
+                    "key_name": key.name or "Unnamed",
+                }
+            )
+
+    return records
+
+
 @admin_only
 async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /search <id|username|name> - find user(s) and all assigned keys across servers."""
+    """Command: /search <owner_id|owner_username|key_name> - find owners and assigned keys across servers."""
     if not update.message:
         return
 
     if len(context.args) == 0:
         await update.message.reply_text(
-            "Usage: `/search <owner_user_id|owner_username|name>`\n"
-            "Example: `/search 1802096079` or `/search yeshwethway`",
+            "Usage: `/search <owner_user_id|owner_username|key_name>`\n"
+            "Example: `/search 1802096079` or `/search office-macbook`",
             parse_mode="Markdown",
         )
         return
 
     q = " ".join(context.args).strip().lower()
     principals = _collect_search_principals()
-    matched = [p for p in principals if _principal_matches_query(p, q)]
+    assigned_records = _collect_assigned_key_records()
+
+    assigned_by_user: dict[int, list[dict]] = {}
+    key_name_match_user_ids: set[int] = set()
+    for item in assigned_records:
+        user_id = int(item["user_id"])
+        assigned_by_user.setdefault(user_id, []).append(item)
+
+        key_name = (item.get("key_name") or "").lower()
+        key_id = str(item.get("key_id") or "")
+        if q in key_name or q in key_id:
+            key_name_match_user_ids.add(user_id)
+
+    matched = [
+        p
+        for p in principals
+        if _principal_matches_query(p, q) or int(p["user_id"]) in key_name_match_user_ids
+    ]
 
     if not matched:
         await update.message.reply_text(
-            f"No users found for search: `{q}`",
+            f"No matching owners found for: `{q}`",
             parse_mode="Markdown",
         )
         return
@@ -607,7 +664,7 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         role_label = "👑 OWNER" if role == "owner" else "🛡️ ADMIN" if role == "admin" else "👤 USER"
         username_text = f"@{username}" if username else "(no username)"
 
-        assigned = queries.get_user_assigned_keys(user_id)
+        assigned = assigned_by_user.get(user_id, [])
         lines.append(f"{role_label} | ID: `{user_id}` | Username: {username_text} | Name: {first_name}")
         lines.append(f"Assigned Keys: *{len(assigned)}*")
 
@@ -615,7 +672,8 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for item in assigned[:15]:
                 alias = item["server_alias"]
                 key_id = item["key_id"]
-                lines.append(f"- `{alias}` / `{key_id}` -> `/manage {alias} {key_id}`")
+                key_name = item.get("key_name") or "Unnamed"
+                lines.append(f"- `{alias}` / `{key_id}` | Name: *{key_name}* -> `/manage {alias} {key_id}`")
             if len(assigned) > 15:
                 lines.append(f"- ... and *{len(assigned) - 15}* more keys")
         lines.append("")
