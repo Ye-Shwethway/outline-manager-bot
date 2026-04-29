@@ -66,6 +66,8 @@ def _umgr_assign_servers_keyboard(user_id: int, servers: dict) -> InlineKeyboard
 def _umgr_assign_keys_keyboard(user_id: int, alias: str, keys: list) -> InlineKeyboardMarkup:
     rows = []
     for key in keys[:20]:
+        if key["assigned_user_id"]:
+            continue
         key_name = key["name"] or "Unnamed"
         status_prefix = key["status_prefix"]
         rows.append(
@@ -389,13 +391,32 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
         # Show free keys first, then assigned keys for clarity.
         key_entries.sort(key=lambda x: (x["assigned_user_id"] is not None, str(x["key_id"])))
 
+        if free_count == 0:
+            await query.edit_message_text(
+                (
+                    "🔑 *Select Key To Assign*\n\n"
+                    f"User ID: `{user_id}`\n"
+                    f"Server: `{alias}`\n"
+                    f"Free: *{free_count}* | Assigned: *{assigned_count}*\n"
+                    "No free keys are available on this server right now."
+                ),
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("⬅️ Back Servers", callback_data=f"umgr|assignsrv|{user_id}")],
+                        [InlineKeyboardButton("❎ Close", callback_data="umgr|close")],
+                    ]
+                ),
+            )
+            return
+
         await query.edit_message_text(
             (
                 "🔑 *Select Key To Assign*\n\n"
                 f"User ID: `{user_id}`\n"
                 f"Server: `{alias}`\n"
                 f"Free: *{free_count}* | Assigned: *{assigned_count}*\n"
-                "Legend: 🟢 free, 🔒 already assigned"
+                "Legend: 🟢 free (selectable), 🔒 already assigned (not selectable)"
             ),
             parse_mode='Markdown',
             reply_markup=_umgr_assign_keys_keyboard(user_id, alias, key_entries),
