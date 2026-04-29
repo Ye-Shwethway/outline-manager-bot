@@ -10,6 +10,7 @@ from src.utils.keyboards import (
     get_key_management_keyboard,
     get_delete_confirmation_keyboard,
     get_expiry_preset_keyboard,
+    get_renew_duration_keyboard,
 )
 from src.utils.inline_messages import (
     close_active_inline_message,
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 BYTES_PER_MB = 1_000_000
 BYTES_PER_GB = 1_000_000_000
 PENDING_DELETE_KEY = "pending_sold_delete"
+PENDING_RENEW_KEY = "pending_renew"
 
 @admin_only
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -345,6 +347,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 clear_if_matches(context, query.message.message_id)
 
     elif action == "expiry":
+        await query.answer()
         lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
         expiry_at_utc = lifecycle.get("expiry_at_utc")
         expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
@@ -363,6 +366,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         )
 
     elif action in {"expd30", "expd90", "expd180", "expd360"}:
+        await query.answer()
         day_map = {
             "expd30": 30,
             "expd90": 90,
@@ -397,6 +401,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             clear_if_matches(context, query.message.message_id)
 
     elif action == "expclr":
+        await query.answer()
         queries.set_key_expiry(alias, str(key_id), None)
         queries.clear_key_expired(alias, str(key_id))
         queries.add_key_lifecycle_event(
@@ -415,8 +420,68 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             clear_if_matches(context, query.message.message_id)
 
     elif action == "expcancel":
+        await query.answer("Cancelled.")
         await query.edit_message_text(
             f"✅ Expiry update cancelled for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+
+    elif action == "renew":
+        await query.answer()
+        lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+        expiry_at_utc = lifecycle.get("expiry_at_utc")
+        current_expiry = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
+        await query.edit_message_text(
+            (
+                "🔄 *Renew Key*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"Current Expiry (Yangon): *{current_expiry}*\n\n"
+                "Step 1/2: Choose renewal duration.\n"
+                "Step 2/2: You will then type the new quota in GB."
+            ),
+            reply_markup=get_renew_duration_keyboard(alias, key_id),
+            parse_mode='Markdown'
+        )
+
+    elif action in {"rnd30", "rnd90", "rnd180", "rnd360"}:
+        await query.answer()
+        day_map = {
+            "rnd30": 30,
+            "rnd90": 90,
+            "rnd180": 180,
+            "rnd360": 360,
+        }
+        days = day_map[action]
+        context.user_data[PENDING_RENEW_KEY] = {
+            "alias": alias,
+            "key_id": str(key_id),
+            "days": days,
+            "actor_user_id": update.effective_user.id if update.effective_user else None,
+            "actor_username": update.effective_user.username if update.effective_user else None,
+        }
+        await query.edit_message_text(
+            (
+                "📝 *Renew Quota Input Required*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"Duration: *+{days} days*\n\n"
+                "Now type the *new quota in GB* (example: `50`).\n"
+                "Type `0` for unlimited.\n"
+                "Type `cancel` to abort."
+            ),
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+
+    elif action == "rncancel":
+        await query.answer("Cancelled.")
+        context.user_data.pop(PENDING_RENEW_KEY, None)
+        await query.edit_message_text(
+            f"✅ Renew cancelled for key `{key_id}` on `{alias}`.",
             parse_mode='Markdown'
         )
         if query.message:
@@ -501,3 +566,100 @@ async def handle_manual_sold_delete_confirmation(update: Update, context: Contex
         )
     finally:
         context.user_data.pop(PENDING_DELETE_KEY, None)
+
+
+async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Final text input step for renew flow: receives new quota GB."""
+    pending = context.user_data.get(PENDING_RENEW_KEY)
+    if not pending or not update.message:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    actor_user_id = pending.get("actor_user_id")
+    if actor_user_id and user.id != actor_user_id:
+        return
+
+    text = (update.message.text or "").strip().lower()
+    alias = pending.get("alias")
+    key_id = pending.get("key_id")
+    days = int(pending.get("days", 0))
+    actor_username = pending.get("actor_username")
+
+    if text == "cancel":
+        context.user_data.pop(PENDING_RENEW_KEY, None)
+        await update.message.reply_text(
+            f"✅ Renew cancelled for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        quota_gb = float(text)
+        if quota_gb < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "⚠️ Invalid quota. Please enter a non-negative number in GB (example: `50`), or `cancel`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    client = get_vpn_client(alias)
+    if not client:
+        context.user_data.pop(PENDING_RENEW_KEY, None)
+        await update.message.reply_text(
+            f"❌ Could not connect to server `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        if quota_gb == 0:
+            client.delete_data_limit(key_id)
+        else:
+            quota_bytes = int(quota_gb * BYTES_PER_GB)
+            client.add_data_limit(key_id, quota_bytes)
+
+        now_utc = utc_now_iso()
+        new_expiry_utc = add_days_from_utc(now_utc, days)
+
+        queries.set_key_expiry(alias, key_id, new_expiry_utc)
+        queries.record_key_renewal(alias, key_id, quota_gb, renewed_at_utc=now_utc)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="renew",
+            actor_user_id=user.id,
+            actor_username=actor_username or user.username,
+            payload={
+                "days": days,
+                "quota_gb": quota_gb,
+                "expiry_at_utc": new_expiry_utc,
+                "renewed_at_utc": now_utc,
+            },
+            created_at_utc=now_utc,
+        )
+
+        quota_text = "Unlimited" if quota_gb == 0 else f"{quota_gb:.2f} GB"
+        await update.message.reply_text(
+            (
+                "✅ *Renew Completed*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"New Quota: *{quota_text}*\n"
+                f"New Expiry (Yangon): *{to_yangon_display(new_expiry_utc)}*\n"
+                f"Policy: *+{days} days from renewal time*"
+            ),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Manual renew error: {e}")
+        await update.message.reply_text(
+            f"❌ Renew failed for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+    finally:
+        context.user_data.pop(PENDING_RENEW_KEY, None)

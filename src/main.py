@@ -35,7 +35,7 @@ HELP_TEXT = (
     "- `/id` Show your Telegram user id\n"
     "- `/keys` Show servers as inline buttons for key management\n"
     "- `/newkey` Start interactive key creation wizard\n"
-    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Mark Sold, Delete)\n"
+    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Renew, Mark Sold, Delete)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
@@ -142,7 +142,7 @@ def main():
     
     # 6. Register Callbacks (Inline Buttons)
     app.add_handler(CallbackQueryHandler(lists.handle_listkeys_callback, pattern="^listkeys_"))
-    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel)_"))
+    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postsold_(yes|no)_"))
     
     # 7. Register Wizards
@@ -150,6 +150,7 @@ def main():
 
     # 7.1 Register manual sold-key delete text confirmations
     app.add_handler(MessageHandler(filters.Regex(r"(?i)^(delete|cancel)$"), lists.handle_manual_sold_delete_confirmation))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_renew_quota_input))
 
     # 8. Register Global Error Handler
     app.add_error_handler(global_error_handler)
