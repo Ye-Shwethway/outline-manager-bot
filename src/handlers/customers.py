@@ -562,13 +562,13 @@ def _collect_search_principals() -> list[dict]:
 
 def _principal_matches_query(principal: dict, q: str) -> bool:
     user_id = str(principal.get("user_id") or "")
-    username = (principal.get("username") or "").lower()
-    first_name = (principal.get("first_name") or "").lower()
+    username = (principal.get("username") or "").casefold()
+    first_name = (principal.get("first_name") or "").casefold()
     return q in user_id or q in username or q in first_name
 
 
-def _collect_assigned_key_records() -> list[dict]:
-    """Collects live assigned key records including key names for /search key-name matching."""
+def _collect_key_records() -> list[dict]:
+    """Collects live key records including key names and optional assigned owner for /search."""
     records: list[dict] = []
     servers = queries.get_servers()
 
@@ -587,13 +587,12 @@ def _collect_assigned_key_records() -> list[dict]:
             key_id = str(key.key_id)
             lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
             assigned_user_id = lifecycle.get("assigned_user_id")
-            if not assigned_user_id:
-                continue
-
-            try:
-                owner_user_id = int(assigned_user_id)
-            except (TypeError, ValueError):
-                continue
+            owner_user_id = None
+            if assigned_user_id:
+                try:
+                    owner_user_id = int(assigned_user_id)
+                except (TypeError, ValueError):
+                    owner_user_id = None
 
             records.append(
                 {
@@ -621,20 +620,25 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    q = " ".join(context.args).strip().lower()
+    q = " ".join(context.args).strip().casefold()
     principals = _collect_search_principals()
-    assigned_records = _collect_assigned_key_records()
+    key_records = _collect_key_records()
 
     assigned_by_user: dict[int, list[dict]] = {}
     key_name_match_user_ids: set[int] = set()
-    for item in assigned_records:
-        user_id = int(item["user_id"])
-        assigned_by_user.setdefault(user_id, []).append(item)
+    unassigned_key_matches: list[dict] = []
+    for item in key_records:
+        user_id = item.get("user_id")
+        if user_id is not None:
+            assigned_by_user.setdefault(int(user_id), []).append(item)
 
-        key_name = (item.get("key_name") or "").lower()
+        key_name = (item.get("key_name") or "").casefold()
         key_id = str(item.get("key_id") or "")
         if q in key_name or q in key_id:
-            key_name_match_user_ids.add(user_id)
+            if user_id is not None:
+                key_name_match_user_ids.add(int(user_id))
+            else:
+                unassigned_key_matches.append(item)
 
     matched = [
         p
@@ -642,7 +646,7 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _principal_matches_query(p, q) or int(p["user_id"]) in key_name_match_user_ids
     ]
 
-    if not matched:
+    if not matched and not unassigned_key_matches:
         await update.message.reply_text(
             f"No matching owners found for: `{q}`",
             parse_mode="Markdown",
@@ -680,6 +684,17 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(matched) > 20:
         lines.append(f"Showing first 20 results out of {len(matched)} matches.")
+
+    if unassigned_key_matches:
+        lines.append("")
+        lines.append("🔑 *Unassigned Key Matches*")
+        for item in unassigned_key_matches[:20]:
+            alias = item["server_alias"]
+            key_id = item["key_id"]
+            key_name = item.get("key_name") or "Unnamed"
+            lines.append(f"- `{alias}` / `{key_id}` | Name: *{key_name}* -> `/manage {alias} {key_id}`")
+        if len(unassigned_key_matches) > 20:
+            lines.append(f"- ... and *{len(unassigned_key_matches) - 20}* more unassigned key matches")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
