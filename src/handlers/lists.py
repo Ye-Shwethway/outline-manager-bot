@@ -261,6 +261,7 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
         keys = client.get_keys()
         sold_keys = queries.get_sold_keys(alias)
         key_creators = queries.get_key_creators(alias)
+        admin_username_map = {int(item["user_id"]): item.get("username") for item in queries.get_admin_profiles()}
         server_data = queries.get_server(alias)
         
         max_keys = int(server_data.get('max_key_count') or 0) if server_data else 0
@@ -292,7 +293,21 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             expiry_at_utc = lifecycle.get("expiry_at_utc")
             expiry_tag = "⛔ EXPIRED" if lifecycle.get("is_expired") else "✅ ACTIVE"
             expiry_text = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
-            owner_user_id = lifecycle.get("assigned_user_id") or "Unassigned"
+            assigned_user_id = lifecycle.get("assigned_user_id")
+            if assigned_user_id:
+                try:
+                    owner_user_id = int(assigned_user_id)
+                except (TypeError, ValueError):
+                    owner_user_id = assigned_user_id
+                owner_username = admin_username_map.get(int(owner_user_id)) if str(owner_user_id).isdigit() else None
+                if not owner_username:
+                    customer = queries.get_customer(int(owner_user_id)) if str(owner_user_id).isdigit() else None
+                    owner_username = customer.get("username") if customer else None
+                owner_id_line = f"`{owner_user_id}`"
+                owner_username_line = f"`@{owner_username}`" if owner_username else "*Unknown*"
+            else:
+                owner_id_line = "*Unassigned*"
+                owner_username_line = "*Unassigned*"
 
             key_id_str = str(key.key_id)
             creator_username = key_creators.get(key_id_str)
@@ -304,7 +319,8 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             else:
                 msg += f"Usage: {used_gb:.2f} GB / Unlimited\n"
             msg += f"Expiry: {expiry_text} ({expiry_tag})\n"
-            msg += f"Owner User ID: {owner_user_id}\n"
+            msg += f"Owner User ID: {owner_id_line}\n"
+            msg += f"Owner Username: {owner_username_line}\n"
             msg += f"Manage: `/manage {alias} {key.key_id}`\n\n"
             
         await query.edit_message_text(msg, parse_mode='Markdown')
