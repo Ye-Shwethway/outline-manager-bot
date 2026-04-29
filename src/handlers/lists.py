@@ -732,6 +732,35 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             )
             if query.message:
                 clear_if_matches(context, query.message.message_id)
+            return
+
+        client = get_vpn_client(alias)
+        if not client:
+            await query.answer("Could not connect to server.", show_alert=True)
+            await query.edit_message_text(
+                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
+            return
+
+        try:
+            client.delete_key(key_id)
+            queries.remove_key_metadata(alias, key_id)
+            await query.answer("Key deleted successfully!", show_alert=True)
+            await query.edit_message_text(f"🗑️ Key `{key_id}` was deleted from `{alias}`.", parse_mode='Markdown')
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
+        except Exception as e:
+            await query.answer("Failed to delete key.", show_alert=True)
+            logger.error(f"Delete error: {e}")
+            await query.edit_message_text(
+                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
+                parse_mode='Markdown'
+            )
+            if query.message:
+                clear_if_matches(context, query.message.message_id)
 
     elif action == "expiry":
         await query.answer()
@@ -912,35 +941,6 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         )
         if query.message:
             clear_if_matches(context, query.message.message_id)
-            return
-
-        client = get_vpn_client(alias)
-        if not client:
-            await query.answer("Could not connect to server.", show_alert=True)
-            await query.edit_message_text(
-                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
-                parse_mode='Markdown'
-            )
-            if query.message:
-                clear_if_matches(context, query.message.message_id)
-            return
-
-        try:
-            client.delete_key(key_id)
-            queries.remove_key_metadata(alias, key_id)
-            await query.answer("Key deleted successfully!", show_alert=True)
-            await query.edit_message_text(f"🗑️ Key `{key_id}` was deleted from `{alias}`.", parse_mode='Markdown')
-            if query.message:
-                clear_if_matches(context, query.message.message_id)
-        except Exception as e:
-            await query.answer("Failed to delete key.", show_alert=True)
-            logger.error(f"Delete error: {e}")
-            await query.edit_message_text(
-                f"❌ Delete action failed for key `{key_id}` on `{alias}`.",
-                parse_mode='Markdown'
-            )
-            if query.message:
-                clear_if_matches(context, query.message.message_id)
 
 @admin_only
 async def handle_manual_sold_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
