@@ -3,11 +3,42 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from src.config import OWNER_ID
 from src.database import queries
 from src.utils.decorators import admin_only
 from src.utils.datetime_utils import to_yangon_display
 
 logger = logging.getLogger(__name__)
+
+
+def _review_recipients() -> list[int]:
+    return sorted(set([OWNER_ID, *queries.get_admins()]))
+
+
+async def _notify_registration_reviewers(
+    context: ContextTypes.DEFAULT_TYPE,
+    applied_user_id: int,
+    username: str | None,
+    first_name: str | None,
+):
+    uname = f"@{username}" if username else "(no username)"
+    first_name_text = first_name or "N/A"
+    text = (
+        "🆕 *New User Registration Request*\n\n"
+        f"Telegram ID: `{applied_user_id}`\n"
+        f"Username: {uname}\n"
+        f"First Name: {first_name_text}\n\n"
+        "Review commands:\n"
+        f"`/approve {applied_user_id}`\n"
+        f"`/reject {applied_user_id}`\n\n"
+        "After approval, assign keys via `/manage <alias> <key_id>` -> *Assign User*."
+    )
+
+    for reviewer_id in _review_recipients():
+        try:
+            await context.bot.send_message(chat_id=reviewer_id, text=text, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Failed to notify reviewer {reviewer_id} for registration {applied_user_id}: {e}")
 
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -16,11 +47,32 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not update.message:
         return
 
+    existing = queries.get_customer(user.id)
+    if existing and (existing.get("status") or "").lower() == "approved":
+        await update.message.reply_text(
+            "✅ Your account is already approved. Use /mykeys to view assigned keys.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if existing and (existing.get("status") or "").lower() == "pending":
+        await update.message.reply_text(
+            "⏳ Your registration is already pending review. Please wait for Owner/Admin approval.",
+            parse_mode="Markdown",
+        )
+        return
+
     queries.upsert_customer(
         user_id=user.id,
         username=user.username,
         first_name=user.first_name,
         status="pending",
+    )
+    await _notify_registration_reviewers(
+        context=context,
+        applied_user_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
     )
     await update.message.reply_text(
         "✅ Registration request submitted. Please wait for Owner/Admin approval.",

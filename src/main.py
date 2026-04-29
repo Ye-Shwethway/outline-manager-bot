@@ -90,7 +90,12 @@ async def post_init(application):
 async def start_command(update: Update, context):
     """The /start command."""
     await update.message.reply_text(
-        "🛡️ *Outline Server Manager*\n\nUse `/help` to view the full command guide.",
+        (
+            "🛡️ *Outline Server Manager*\n\n"
+            "If you are a user/customer, start with `/register` and wait for Owner/Admin approval.\n"
+            "After approval, use `/mykeys` to view your assigned keys.\n\n"
+            "Use `/help` to view the full command guide."
+        ),
         parse_mode='Markdown'
     )
 
