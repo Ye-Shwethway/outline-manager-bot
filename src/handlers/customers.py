@@ -345,12 +345,16 @@ async def mykeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    items = queries.get_user_assigned_keys(user.id)
-    if not items:
-        await update.message.reply_text("No keys are assigned to your account yet.")
-        return
+    text = build_mykeys_snapshot_text(user.id)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-    # Build per-server key snapshots once so users can see live usage/remaining quota.
+
+def build_mykeys_snapshot_text(user_id: int) -> str:
+    """Builds the same content shown by /mykeys for reuse in notifications."""
+    items = queries.get_user_assigned_keys(user_id)
+    if not items:
+        return "No keys are assigned to your account yet."
+
     server_key_map: dict[str, dict[str, object]] = {}
     for alias in sorted({item["server_alias"] for item in items}):
         client = get_vpn_client(alias)
@@ -361,7 +365,7 @@ async def mykeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keys = client.get_keys()
             server_key_map[alias] = {str(key.key_id): key for key in keys}
         except Exception as e:
-            logger.error(f"/mykeys key fetch error on {alias}: {e}")
+            logger.error(f"mykeys snapshot fetch error on {alias}: {e}")
             server_key_map[alias] = {}
 
     lines = ["🔑 *Your Assigned Keys*", ""]
@@ -400,7 +404,17 @@ async def mykeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"  Renew Count: *{renew_count}*"
         )
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    return "\n".join(lines)
+
+
+async def notify_user_assigned_keys_snapshot(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Pushes current assigned-keys snapshot to user after assignment changes."""
+    text = build_mykeys_snapshot_text(user_id)
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="✅ A key has been assigned to your account. Here is your latest key status:\n\n" + text,
+        parse_mode="Markdown",
+    )
 
 
 @admin_only

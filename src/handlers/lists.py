@@ -17,6 +17,7 @@ from src.utils.inline_messages import (
     set_active_inline_message,
     clear_if_matches,
 )
+from src.handlers.customers import notify_user_assigned_keys_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +444,11 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             actor_username=update.effective_user.username if update.effective_user else None,
             payload={"assigned_user_id": user_id, "source": "manage_user_flow"},
         )
+
+        try:
+            await notify_user_assigned_keys_snapshot(context, user_id)
+        except Exception as e:
+            logger.info(f"Could not notify user {user_id} after assignment: {e}")
 
         await query.edit_message_text(
             (
@@ -1139,6 +1145,10 @@ async def handle_manual_assign_user_input(update: Update, context: ContextTypes.
             actor_username=actor_username or user.username,
             payload={"assigned_user_id": target_user_id},
         )
+        try:
+            await notify_user_assigned_keys_snapshot(context, target_user_id)
+        except Exception as e:
+            logger.info(f"Could not notify user {target_user_id} after assignment: {e}")
         await update.message.reply_text(
             (
                 "✅ *Key Assigned*\n\n"
