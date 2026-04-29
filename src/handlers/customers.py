@@ -507,6 +507,125 @@ async def notify_user_assigned_keys_snapshot(context: ContextTypes.DEFAULT_TYPE,
     )
 
 
+def _collect_search_principals() -> list[dict]:
+    """Builds de-duplicated principal index for /search from owner/admin/customer sources."""
+    principals: dict[int, dict] = {}
+
+    # 1) Seed owner/admin from admin table first.
+    admin_profiles = {int(item["user_id"]): item for item in queries.get_admin_profiles()}
+
+    principals[OWNER_ID] = {
+        "user_id": OWNER_ID,
+        "username": admin_profiles.get(OWNER_ID, {}).get("username"),
+        "first_name": None,
+        "role": "owner",
+    }
+
+    for admin_id, profile in admin_profiles.items():
+        if admin_id == OWNER_ID:
+            continue
+        principals[admin_id] = {
+            "user_id": admin_id,
+            "username": profile.get("username"),
+            "first_name": None,
+            "role": "admin",
+        }
+
+    # 2) Merge customers (all statuses), preserving higher privilege role when overlaps happen.
+    customer_rows = (
+        queries.get_customers_by_status("pending")
+        + queries.get_customers_by_status("approved")
+        + queries.get_customers_by_status("rejected")
+    )
+    for row in customer_rows:
+        user_id = int(row["user_id"])
+        existing = principals.get(user_id)
+        username = row.get("username")
+        first_name = row.get("first_name")
+
+        if existing:
+            if not existing.get("username") and username:
+                existing["username"] = username
+            if not existing.get("first_name") and first_name:
+                existing["first_name"] = first_name
+            principals[user_id] = existing
+        else:
+            principals[user_id] = {
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+                "role": "customer",
+            }
+
+    return sorted(principals.values(), key=lambda item: int(item["user_id"]))
+
+
+def _principal_matches_query(principal: dict, q: str) -> bool:
+    user_id = str(principal.get("user_id") or "")
+    username = (principal.get("username") or "").lower()
+    first_name = (principal.get("first_name") or "").lower()
+    return q in user_id or q in username or q in first_name
+
+
+@admin_only
+async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /search <id|username|name> - find user(s) and all assigned keys across servers."""
+    if not update.message:
+        return
+
+    if len(context.args) == 0:
+        await update.message.reply_text(
+            "Usage: `/search <owner_user_id|owner_username|name>`\n"
+            "Example: `/search 1802096079` or `/search yeshwethway`",
+            parse_mode="Markdown",
+        )
+        return
+
+    q = " ".join(context.args).strip().lower()
+    principals = _collect_search_principals()
+    matched = [p for p in principals if _principal_matches_query(p, q)]
+
+    if not matched:
+        await update.message.reply_text(
+            f"No users found for search: `{q}`",
+            parse_mode="Markdown",
+        )
+        return
+
+    lines = [
+        "🔎 *Search Results*",
+        f"Query: `{q}`",
+        f"Matched Users: *{len(matched)}*",
+        "",
+    ]
+
+    for principal in matched[:20]:
+        user_id = int(principal["user_id"])
+        username = principal.get("username")
+        first_name = principal.get("first_name") or "N/A"
+        role = principal.get("role") or "customer"
+        role_label = "👑 OWNER" if role == "owner" else "🛡️ ADMIN" if role == "admin" else "👤 USER"
+        username_text = f"@{username}" if username else "(no username)"
+
+        assigned = queries.get_user_assigned_keys(user_id)
+        lines.append(f"{role_label} | ID: `{user_id}` | Username: {username_text} | Name: {first_name}")
+        lines.append(f"Assigned Keys: *{len(assigned)}*")
+
+        if assigned:
+            for item in assigned[:15]:
+                alias = item["server_alias"]
+                key_id = item["key_id"]
+                lines.append(f"- `{alias}` / `{key_id}` -> `/manage {alias} {key_id}`")
+            if len(assigned) > 15:
+                lines.append(f"- ... and *{len(assigned) - 15}* more keys")
+        lines.append("")
+
+    if len(matched) > 20:
+        lines.append(f"Showing first 20 results out of {len(matched)} matches.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 @admin_only
 async def users_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command: /users - open status tabs and user management workflow."""

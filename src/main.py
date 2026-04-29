@@ -27,6 +27,7 @@ OWNER_ONLY_COMMANDS = {
 
 ADMIN_OWNER_COMMANDS = {
     "keys",
+    "search",
     "newkey",
     "manage",
     "cancel",
@@ -44,7 +45,7 @@ PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
-    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
+    "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -61,6 +62,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/help` Show this guide\n"
     "- `/id` Show your Telegram user id\n"
     "- `/keys` Show servers as inline buttons for key management\n"
+    "- `/search <owner_user_id|owner_username|name>` Search users and list assigned keys across servers\n"
     "- `/newkey` Start interactive key creation wizard\n"
     "- `/manage` Open approved-user management flow (assign/unassign keys)\n"
     "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Renew, Mark Sold, Delete)\n"
@@ -89,6 +91,8 @@ PRIVILEGED_HELP_TEXT = (
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
     "- `/scan`\n"
+    "- `/search yeshwethway`\n"
+    "- `/search 1802096079`\n"
     "- `/reviewnoti off`\n"
     "- `/reviewnoti on`\n"
     "- `/backup`\n"
@@ -235,6 +239,7 @@ def main():
     app.add_handler(CommandHandler("backup", owner.backup_now))
     app.add_handler(CommandHandler("autobackup", owner.get_last_auto_backup))
     app.add_handler(CommandHandler("users", customers.users_overview))
+    app.add_handler(CommandHandler("search", customers.search_user))
     app.add_handler(CommandHandler("approve", customers.approve_user))
     app.add_handler(CommandHandler("reject", customers.reject_user))
     app.add_handler(CommandHandler("removeuser", customers.remove_user))
