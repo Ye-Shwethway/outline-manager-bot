@@ -29,6 +29,10 @@ def get_key_management_keyboard(server_alias: str, key_id: str, is_sold: bool) -
             InlineKeyboardButton("🔄 Renew", callback_data=f"renew_{server_alias}_{key_id}")
         ],
         [
+            InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
+            InlineKeyboardButton("🚫 Unassign", callback_data=f"unassign_{server_alias}_{key_id}"),
+        ],
+        [
             InlineKeyboardButton(sold_text, callback_data=f"toggle_{server_alias}_{key_id}")
         ],
         [

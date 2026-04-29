@@ -24,6 +24,7 @@ BYTES_PER_MB = 1_000_000
 BYTES_PER_GB = 1_000_000_000
 PENDING_DELETE_KEY = "pending_sold_delete"
 PENDING_RENEW_KEY = "pending_renew"
+PENDING_ASSIGN_KEY = "pending_assign"
 
 @admin_only
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,6 +141,8 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     expiry_at_utc = lifecycle.get("expiry_at_utc")
     expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
     expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
+    assigned_user_id = lifecycle.get("assigned_user_id")
+    owner_line = f"{assigned_user_id}" if assigned_user_id else "Unassigned"
 
     await close_active_inline_message(update, context)
     keyboard = get_key_management_keyboard(alias, key_id, is_sold)
@@ -150,7 +153,8 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Key ID: `{target_key.key_id}`\n"
             f"Name: *{target_key.name or 'Unnamed'}*\n"
             f"Usage: {usage_line}\n"
-            f"Expiry: *{expiry_line}*"
+            f"Expiry: *{expiry_line}*\n"
+            f"Owner User ID: *{owner_line}*"
         ),
         reply_markup=keyboard,
         parse_mode='Markdown'
@@ -486,6 +490,45 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         )
         if query.message:
             clear_if_matches(context, query.message.message_id)
+
+    elif action == "assign":
+        await query.answer()
+        context.user_data[PENDING_ASSIGN_KEY] = {
+            "alias": alias,
+            "key_id": str(key_id),
+            "actor_user_id": update.effective_user.id if update.effective_user else None,
+            "actor_username": update.effective_user.username if update.effective_user else None,
+        }
+        await query.edit_message_text(
+            (
+                "👤 *Assign User To Key*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n\n"
+                "Type the target *approved user_id* in your next message.\n"
+                "Type `cancel` to abort."
+            ),
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+
+    elif action == "unassign":
+        await query.answer()
+        queries.set_key_assignment(alias, str(key_id), None)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=str(key_id),
+            event_type="unassigned_user",
+            actor_user_id=update.effective_user.id if update.effective_user else None,
+            actor_username=update.effective_user.username if update.effective_user else None,
+            payload={"assigned_user_id": None},
+        )
+        await query.edit_message_text(
+            f"✅ User unassigned from key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
             return
 
         client = get_vpn_client(alias)
@@ -663,3 +706,76 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
         )
     finally:
         context.user_data.pop(PENDING_RENEW_KEY, None)
+
+
+async def handle_manual_assign_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Final text input step for assignment flow: receives approved user id."""
+    pending = context.user_data.get(PENDING_ASSIGN_KEY)
+    if not pending or not update.message:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    actor_user_id = pending.get("actor_user_id")
+    if actor_user_id and user.id != actor_user_id:
+        return
+
+    text = (update.message.text or "").strip().lower()
+    alias = pending.get("alias")
+    key_id = pending.get("key_id")
+    actor_username = pending.get("actor_username")
+
+    if text == "cancel":
+        context.user_data.pop(PENDING_ASSIGN_KEY, None)
+        await update.message.reply_text(
+            f"✅ Assignment cancelled for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        target_user_id = int(text)
+    except ValueError:
+        await update.message.reply_text(
+            "⚠️ Invalid user id. Please enter a numeric user id, or `cancel`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    customer = queries.get_customer(target_user_id)
+    if not customer or (customer.get("status") or "").lower() != "approved":
+        await update.message.reply_text(
+            "❌ Target user is not approved. Approve first with /approve <user_id>.",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        queries.set_key_assignment(alias, key_id, target_user_id)
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="assigned_user",
+            actor_user_id=user.id,
+            actor_username=actor_username or user.username,
+            payload={"assigned_user_id": target_user_id},
+        )
+        await update.message.reply_text(
+            (
+                "✅ *Key Assigned*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"Assigned User ID: *{target_user_id}*"
+            ),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Manual assign user error: {e}")
+        await update.message.reply_text(
+            f"❌ Assign failed for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+    finally:
+        context.user_data.pop(PENDING_ASSIGN_KEY, None)

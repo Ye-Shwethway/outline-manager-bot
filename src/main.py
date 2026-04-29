@@ -9,7 +9,7 @@ from src.services.expiry_service import monitor_expired_keys
 from src.services.notifier import monitor_used_up_keys
 
 # Import our handlers
-from src.handlers import owner, lists, wizards
+from src.handlers import owner, lists, wizards, customers
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`\n"
-    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`\n"
-    "- *Everyone:* `/start`, `/help`, `/id`\n\n"
+    "- *Admins + Owner:* `/keys`, `/newkey`, `/manage`, `/noti`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`\n"
+    "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
     "2. Owner sets capacity with `/setkeylimit <alias> <max_keys>` (0 = unlimited)\n"
@@ -48,6 +48,11 @@ HELP_TEXT = (
     "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n"
     "- `/backup` Generate and send latest manual backup file (admin/owner)\n"
     "- `/autobackup` Send latest daily auto backup file (admin/owner)\n\n"
+    "- `/users` Show user registration overview (admin/owner)\n"
+    "- `/approve <user_id>` Approve registered user (admin/owner)\n"
+    "- `/reject <user_id>` Reject user (admin/owner)\n"
+    "- `/register` Submit your user registration request\n"
+    "- `/mykeys` Show keys assigned to your account\n\n"
     "*Examples*\n"
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
@@ -135,6 +140,11 @@ def main():
     app.add_handler(CommandHandler("scan", owner.scan_used_up_keys))
     app.add_handler(CommandHandler("backup", owner.backup_now))
     app.add_handler(CommandHandler("autobackup", owner.get_last_auto_backup))
+    app.add_handler(CommandHandler("users", customers.users_overview))
+    app.add_handler(CommandHandler("approve", customers.approve_user))
+    app.add_handler(CommandHandler("reject", customers.reject_user))
+    app.add_handler(CommandHandler("register", customers.register))
+    app.add_handler(CommandHandler("mykeys", customers.mykeys))
     
     # 5. Register List & Manage Commands
     app.add_handler(CommandHandler("keys", lists.list_servers))
@@ -142,7 +152,7 @@ def main():
     
     # 6. Register Callbacks (Inline Buttons)
     app.add_handler(CallbackQueryHandler(lists.handle_listkeys_callback, pattern="^listkeys_"))
-    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel)_"))
+    app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel|assign|unassign)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postsold_(yes|no)_"))
     
     # 7. Register Wizards
@@ -151,6 +161,7 @@ def main():
     # 7.1 Register manual sold-key delete text confirmations
     app.add_handler(MessageHandler(filters.Regex(r"(?i)^(delete|cancel)$"), lists.handle_manual_sold_delete_confirmation))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_renew_quota_input))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_assign_user_input))
 
     # 8. Register Global Error Handler
     app.add_error_handler(global_error_handler)
