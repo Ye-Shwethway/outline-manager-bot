@@ -22,6 +22,7 @@ OWNER_ONLY_COMMANDS = {
     "listserver",
     "deleteserver",
     "setkeylimit",
+    "restart",
     "reviewnoti",
 }
 
@@ -32,7 +33,6 @@ ADMIN_OWNER_COMMANDS = {
     "manage",
     "cancel",
     "noti",
-    "restart",
     "scan",
     "backup",
     "autobackup",
@@ -45,7 +45,7 @@ ADMIN_OWNER_COMMANDS = {
 PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`, `/reviewnoti`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
     "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
@@ -76,7 +76,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/deleteserver <alias>` Delete server (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
-    "- `/restart` Restart bot process (admin/owner, data preserved)\n"
+    "- `/restart` Restart bot process (owner only, data preserved)\n"
     "- `/reviewnoti <on|off>` Toggle whether admins receive new registration-review alerts (owner only)\n"
     "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n"
     "- `/backup` Generate and send latest manual backup file (admin/owner)\n"

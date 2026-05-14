@@ -312,7 +312,7 @@ async def _restart_process_after_ack():
     os._exit(0)
 
 
-@admin_only
+@owner_only
 async def restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command: /restart - restart bot process without touching persisted data."""
     if update.message:
