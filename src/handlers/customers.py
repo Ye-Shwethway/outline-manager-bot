@@ -125,11 +125,13 @@ def _users_action_keyboard(status: str, items: list[dict]) -> InlineKeyboardMark
     rows = []
     for item in items[:12]:
         user_id = int(item["user_id"])
+        username = item.get("username")
         principal_type = item.get("principal_type", "customer")
         role_tag = "👑" if principal_type == "owner" else "🛡️" if principal_type == "admin" else ""
         ptoken = _principal_type_token(principal_type)
+        identity_label = f"{user_id} | @{username}" if username else str(user_id)
         rows.append(
-            [InlineKeyboardButton(f"⚙️ Manage {user_id} {role_tag}".strip(), callback_data=f"uadm_manage_{status}_{user_id}_{ptoken}")]
+            [InlineKeyboardButton(f"⚙️ Manage {identity_label} {role_tag}".strip(), callback_data=f"uadm_manage_{status}_{user_id}_{ptoken}")]
         )
 
     # Always keep the status tab row visible, even when there are no users in current view.
