@@ -216,6 +216,25 @@ def _format_user_line(item: dict) -> str:
     return f"- {role_text} | ID: `{user_id}` | Username: {uname_safe} | Name: {first_name_safe}"
 
 
+def _resolve_username_for_user(user_id: int) -> str | None:
+    customer = queries.get_customer(user_id)
+    if customer and customer.get("username"):
+        return customer.get("username")
+
+    for item in queries.get_admin_profiles():
+        if int(item["user_id"]) == user_id and item.get("username"):
+            return item.get("username")
+    return None
+
+
+def _format_user_identity_markdown(user_id: int) -> str:
+    username = _resolve_username_for_user(user_id)
+    if username:
+        uname_safe = escape_markdown(f"@{username}", version=1)
+        return f"`{user_id}` ({uname_safe})"
+    return f"`{user_id}`"
+
+
 def _build_users_status_text(status: str) -> tuple[str, list[dict]]:
     pending = queries.get_customers_by_status("pending")
     approved = queries.get_customers_by_status("approved")
@@ -895,7 +914,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(
             (
                 f"{action_title}\n\n"
-                f"Target ID: `{target_id}`\n\n"
+                f"Target User: {_format_user_identity_markdown(target_id)}\n\n"
                 f"{action_desc}"
             ),
             parse_mode="Markdown",
@@ -975,7 +994,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(
             (
                 "⚠️ *Confirm User Ban*\n\n"
-                f"Target ID: `{target_id}`\n\n"
+                f"Target User: {_format_user_identity_markdown(target_id)}\n\n"
                 "This will move the user to rejected, unlink all assigned keys, and block re-registration."
             ),
             parse_mode="Markdown",
@@ -1134,7 +1153,7 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     queries.set_customer_status(target_id, "approved", approved_by=actor.id if actor else None)
     await _notify_user_status(context, target_id, "approved")
     await update.message.reply_text(
-        f"✅ User `{target_id}` approved.",
+        f"✅ User {_format_user_identity_markdown(target_id)} approved.",
         parse_mode="Markdown",
         reply_markup=_manage_user_shortcut_keyboard(target_id),
     )
@@ -1163,7 +1182,7 @@ async def reject_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     actor = update.effective_user
     queries.set_customer_status(target_id, "rejected", approved_by=actor.id if actor else None)
     await _notify_user_status(context, target_id, "rejected")
-    await update.message.reply_text(f"⛔ User `{target_id}` rejected.", parse_mode="Markdown")
+    await update.message.reply_text(f"⛔ User {_format_user_identity_markdown(target_id)} rejected.", parse_mode="Markdown")
 
 
 @admin_only
@@ -1184,7 +1203,7 @@ async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     existing = queries.get_customer(target_id)
     if not existing:
-        await update.message.reply_text(f"❌ User `{target_id}` not found in registry.", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ User {_format_user_identity_markdown(target_id)} not found in registry.", parse_mode="Markdown")
         return
 
     actor = update.effective_user
@@ -1193,11 +1212,11 @@ async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _notify_user_status(context, target_id, "removed")
     if existing_status == "rejected":
         await update.message.reply_text(
-            f"♻️ User `{target_id}` unbanned (removed from rejected list).",
+            f"♻️ User {_format_user_identity_markdown(target_id)} unbanned (removed from rejected list).",
             parse_mode="Markdown",
         )
     else:
         await update.message.reply_text(
-            f"🗑️ User `{target_id}` removed and all assigned keys were unlinked.",
+            f"🗑️ User {_format_user_identity_markdown(target_id)} removed and all assigned keys were unlinked.",
             parse_mode="Markdown",
         )

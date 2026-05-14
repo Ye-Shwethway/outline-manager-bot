@@ -1,5 +1,6 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes
 from src.utils.decorators import admin_only
 from src.config import OWNER_ID
@@ -39,6 +40,27 @@ def _can_manage_account(actor_user_id: int | None, target_user_id: int) -> bool:
     if _is_privileged_account(target_user_id):
         return actor_user_id == target_user_id
     return True
+
+
+def _resolve_username_for_user(user_id: int) -> str | None:
+    customer = queries.get_customer(user_id)
+    if customer and customer.get("username"):
+        return customer.get("username")
+
+    for item in queries.get_admin_profiles():
+        if int(item["user_id"]) == user_id and item.get("username"):
+            return item.get("username")
+    return None
+
+
+def _format_user_identity_markdown(user_id: int | None) -> str:
+    if not user_id:
+        return "*Unassigned*"
+    username = _resolve_username_for_user(int(user_id))
+    if username:
+        uname_safe = escape_markdown(f"@{username}", version=1)
+        return f"`{user_id}` ({uname_safe})"
+    return f"`{user_id}`"
 
 
 async def _render_key_management_panel(
@@ -89,7 +111,7 @@ async def _render_key_management_panel(
     expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
     expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
     assigned_user_id = lifecycle.get("assigned_user_id")
-    owner_line = f"{assigned_user_id}" if assigned_user_id else "Unassigned"
+    owner_line = _format_user_identity_markdown(int(assigned_user_id)) if assigned_user_id else "*Unassigned*"
     notice_line = f"{notice}\n\n" if notice else ""
 
     await query.edit_message_text(
@@ -101,7 +123,7 @@ async def _render_key_management_panel(
             f"Name: *{target_key.name or 'Unnamed'}*\n"
             f"Usage: {usage_line}\n"
             f"Expiry: *{expiry_line}*\n"
-            f"Owner User ID: *{owner_line}*\n\n"
+            f"Owner: {owner_line}\n\n"
             "Use buttons below to continue, then close manually when done."
         ),
         reply_markup=get_key_management_keyboard(alias, key_id, is_sold, can_renew),
@@ -303,7 +325,7 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
                 if not owner_username:
                     customer = queries.get_customer(int(owner_user_id)) if str(owner_user_id).isdigit() else None
                     owner_username = customer.get("username") if customer else None
-                owner_id_line = f"`{owner_user_id}`"
+                owner_id_line = _format_user_identity_markdown(int(owner_user_id)) if str(owner_user_id).isdigit() else f"`{owner_user_id}`"
                 owner_username_line = f"`@{owner_username}`" if owner_username else "*Unknown*"
             else:
                 owner_id_line = "*Unassigned*"
@@ -319,7 +341,7 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             else:
                 msg += f"Usage: {used_gb:.2f} GB / Unlimited\n"
             msg += f"Expiry: {expiry_text} ({expiry_tag})\n"
-            msg += f"Owner User ID: {owner_id_line}\n"
+            msg += f"Owner: {owner_id_line}\n"
             msg += f"Owner Username: {owner_username_line}\n"
             msg += f"Manage: `/manage {alias} {key.key_id}`\n\n"
             
@@ -378,7 +400,7 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
     expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
     assigned_user_id = lifecycle.get("assigned_user_id")
-    owner_line = f"{assigned_user_id}" if assigned_user_id else "Unassigned"
+    owner_line = _format_user_identity_markdown(int(assigned_user_id)) if assigned_user_id else "*Unassigned*"
 
     await close_active_inline_message(update, context)
     can_renew = bool(expiry_at_utc)
@@ -391,7 +413,7 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Name: *{target_key.name or 'Unnamed'}*\n"
             f"Usage: {usage_line}\n"
             f"Expiry: *{expiry_line}*\n"
-            f"Owner User ID: *{owner_line}*"
+            f"Owner: {owner_line}"
         ),
         reply_markup=keyboard,
         parse_mode='Markdown'
@@ -449,7 +471,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(
             (
                 "👤 *Manage Approved User*\n\n"
-                f"User ID: `{user_id}`\n"
+                f"User: {_format_user_identity_markdown(user_id)}\n"
                 f"Role: *{role_line}*\n"
                 f"Username: {uname}\n"
                 f"Name: {first_name}\n"
@@ -473,7 +495,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("No servers configured.", show_alert=True)
             return
         await query.edit_message_text(
-            f"➕ *Assign Key*\n\nChoose a server for user `{user_id}`.",
+            f"➕ *Assign Key*\n\nChoose a server for user {_format_user_identity_markdown(user_id)}.",
             parse_mode='Markdown',
             reply_markup=_umgr_assign_servers_keyboard(user_id, servers),
         )
@@ -532,7 +554,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             await query.edit_message_text(
                 (
                     "🔑 *Select Key To Assign*\n\n"
-                    f"User ID: `{user_id}`\n"
+                    f"User: {_format_user_identity_markdown(user_id)}\n"
                     f"Server: `{alias}`\n"
                     f"Free: *{free_count}* | Assigned: *{assigned_count}*\n"
                     "No free keys are available on this server right now."
@@ -550,7 +572,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(
             (
                 "🔑 *Select Key To Assign*\n\n"
-                f"User ID: `{user_id}`\n"
+                f"User: {_format_user_identity_markdown(user_id)}\n"
                 f"Server: `{alias}`\n"
                 f"Free: *{free_count}* | Assigned: *{assigned_count}*\n"
                 "Legend: 🟢 free (selectable), 🔒 already assigned (not selectable)"
@@ -595,7 +617,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(
             (
                 "✅ *Key Assigned*\n\n"
-                f"User ID: `{user_id}`\n"
+                f"User: {_format_user_identity_markdown(user_id)}\n"
                 f"Server: `{alias}`\n"
                 f"Key ID: `{key_id}`"
             ),
@@ -618,7 +640,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
         assigned = queries.get_user_assigned_keys(user_id)
         if not assigned:
             await query.edit_message_text(
-                f"➖ *Unassign Key*\n\nNo keys currently assigned to user `{user_id}`.",
+                f"➖ *Unassign Key*\n\nNo keys currently assigned to user {_format_user_identity_markdown(user_id)}.",
                 parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("⬅️ Back User", callback_data=f"umgr|user|{user_id}")],
@@ -628,7 +650,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             return
 
         await query.edit_message_text(
-            f"➖ *Unassign Key*\n\nSelect a key to unassign from user `{user_id}`.",
+            f"➖ *Unassign Key*\n\nSelect a key to unassign from user {_format_user_identity_markdown(user_id)}.",
             parse_mode='Markdown',
             reply_markup=_umgr_unassign_keyboard(user_id, assigned),
         )
@@ -658,7 +680,7 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(
             (
                 "✅ *Key Unassigned*\n\n"
-                f"User ID: `{user_id}`\n"
+                f"User: {_format_user_identity_markdown(user_id)}\n"
                 f"Server: `{alias}`\n"
                 f"Key ID: `{key_id}`"
             ),
@@ -745,7 +767,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
             expiry_at_utc = lifecycle.get("expiry_at_utc")
             expiry_text = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
-            owner_user_id = lifecycle.get("assigned_user_id") or "Unassigned"
+            owner_user_id = lifecycle.get("assigned_user_id")
+            owner_line = _format_user_identity_markdown(int(owner_user_id)) if owner_user_id else "*Unassigned*"
             renew_count = lifecycle.get("renew_count") or 0
             used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
             if target_key.data_limit:
@@ -765,7 +788,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                     f"{creator_line}\n"
                     f"{usage_line}\n"
                     f"Expiry: *{expiry_text}*\n"
-                    f"Owner User ID: *{owner_user_id}*\n"
+                    f"Owner: {owner_line}\n"
                     f"Renew Count: *{renew_count}*\n\n"
                     f"`{target_key.access_url}`"
                 ),
@@ -844,7 +867,8 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
         lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
         expiry_at_utc = lifecycle.get("expiry_at_utc")
         expiry_text = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
-        owner_user_id = lifecycle.get("assigned_user_id") or "Unassigned"
+        owner_user_id = lifecycle.get("assigned_user_id")
+        owner_line = _format_user_identity_markdown(int(owner_user_id)) if owner_user_id else "*Unassigned*"
         renew_count = lifecycle.get("renew_count") or 0
         await query.answer("Confirm delete to proceed.", show_alert=True)
         await query.edit_message_text(
@@ -855,7 +879,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 f"Name: *{target_key.name or 'Unnamed'}*\n"
                 f"Usage: {usage_line}\n"
                 f"Expiry: *{expiry_text}*\n"
-                f"Owner User ID: *{owner_user_id}*\n"
+                f"Owner: {owner_line}\n"
                 f"Renew Count: *{renew_count}*\n"
                 f"Status: *{status_tag}*\n\n"
                 "This action cannot be undone."
@@ -1321,7 +1345,7 @@ async def handle_manual_assign_user_input(update: Update, context: ContextTypes.
                 "✅ *Key Assigned*\n\n"
                 f"Server: `{alias}`\n"
                 f"Key ID: `{key_id}`\n"
-                f"Assigned User ID: *{target_user_id}*"
+                f"Assigned User: {_format_user_identity_markdown(target_user_id)}"
             ),
             parse_mode='Markdown'
         )
