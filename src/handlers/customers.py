@@ -760,7 +760,8 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 alias = item["server_alias"]
                 key_id = item["key_id"]
                 key_name = item.get("key_name") or "Unnamed"
-                lines.append(f"- `{alias}` / `{key_id}` | Name: *{key_name}* -> `/manage {alias} {key_id}`")
+                key_name_text = _format_text_markdown(key_name, default="Unnamed")
+                lines.append(f"- `{alias}` / `{key_id}` | Name: *{key_name_text}* -> `/manage {alias} {key_id}`")
             if len(assigned) > 15:
                 lines.append(f"- ... and *{len(assigned) - 15}* more keys")
         lines.append("")
@@ -775,7 +776,8 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             alias = item["server_alias"]
             key_id = item["key_id"]
             key_name = item.get("key_name") or "Unnamed"
-            lines.append(f"- `{alias}` / `{key_id}` | Name: *{key_name}* -> `/manage {alias} {key_id}`")
+            key_name_text = _format_text_markdown(key_name, default="Unnamed")
+            lines.append(f"- `{alias}` / `{key_id}` | Name: *{key_name_text}* -> `/manage {alias} {key_id}`")
         if len(unassigned_key_matches) > 20:
             lines.append(f"- ... and *{len(unassigned_key_matches) - 20}* more unassigned key matches")
 

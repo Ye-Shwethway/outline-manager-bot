@@ -3,6 +3,7 @@ import os
 import time
 import asyncio
 from telegram import Update
+from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes
 from src.utils.decorators import owner_only, admin_only
 from src.database import queries
@@ -11,6 +12,12 @@ from src.services.notifier import monitor_used_up_keys
 
 logger = logging.getLogger(__name__)
 REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS = 120
+
+
+def _format_username_markdown(username: str | None, default: str = "(username unavailable)") -> str:
+    if username:
+        return escape_markdown(f"@{username}", version=1)
+    return default
 
 def _strip_outline_label(value: str, label: str) -> str:
     """Accept values copied from access.txt lines such as `apiUrl:...`."""
@@ -69,7 +76,7 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         if queries.add_admin(user_id, username):
-            username_text = f" (@{username})" if username else ""
+            username_text = f" ({_format_username_markdown(username, default='')})" if username else ""
             await update.message.reply_text(f"✅ User `{user_id}`{username_text} added as Admin.", parse_mode='Markdown')
         else:
             await update.message.reply_text(f"⚠️ User `{user_id}` is already an Admin.", parse_mode='Markdown')
@@ -110,7 +117,7 @@ async def list_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 username = None
 
-        username_text = f"@{username}" if username else "(username unavailable)"
+        username_text = _format_username_markdown(username)
         lines.append(f"- `{user_id}` | {username_text}")
 
     msg = "\n".join(lines)
