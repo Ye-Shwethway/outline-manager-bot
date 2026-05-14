@@ -1,6 +1,7 @@
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes
 
 from src.config import OWNER_ID
@@ -210,7 +211,9 @@ def _format_user_line(item: dict) -> str:
     principal_type = item.get("principal_type", "customer")
     role_text = "👑 OWNER" if principal_type == "owner" else "🛡️ ADMIN" if principal_type == "admin" else "👤 USER"
     uname = f"@{username}" if username else "(no username)"
-    return f"- {role_text} | ID: `{user_id}` | Username: {uname} | Name: {first_name}"
+    uname_safe = escape_markdown(uname, version=1)
+    first_name_safe = escape_markdown(str(first_name), version=1)
+    return f"- {role_text} | ID: `{user_id}` | Username: {uname_safe} | Name: {first_name_safe}"
 
 
 def _build_users_status_text(status: str) -> tuple[str, list[dict]]:

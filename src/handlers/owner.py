@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.utils.decorators import owner_only, admin_only
@@ -304,3 +305,20 @@ async def get_last_auto_backup(update: Update, context: ContextTypes.DEFAULT_TYP
             filename=os.path.basename(file_path),
             caption="🗂️ Last auto backup",
         )
+
+
+async def _restart_process_after_ack():
+    await asyncio.sleep(1)
+    os._exit(0)
+
+
+@admin_only
+async def restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /restart - restart bot process without touching persisted data."""
+    if update.message:
+        await update.message.reply_text(
+            "♻️ Restarting bot process now...\n"
+            "Data in database/backups will be preserved.",
+            parse_mode='Markdown',
+        )
+    asyncio.create_task(_restart_process_after_ack())

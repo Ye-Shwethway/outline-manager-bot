@@ -32,6 +32,7 @@ ADMIN_OWNER_COMMANDS = {
     "manage",
     "cancel",
     "noti",
+    "restart",
     "scan",
     "backup",
     "autobackup",
@@ -45,7 +46,7 @@ PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`, `/reviewnoti`\n"
-    "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/cancel`, `/noti`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
+    "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -75,6 +76,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/deleteserver <alias>` Delete server (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
+    "- `/restart` Restart bot process (admin/owner, data preserved)\n"
     "- `/reviewnoti <on|off>` Toggle whether admins receive new registration-review alerts (owner only)\n"
     "- `/scan` Run immediate used-up scan and alert delivery (admin/owner)\n"
     "- `/backup` Generate and send latest manual backup file (admin/owner)\n"
@@ -90,6 +92,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
+    "- `/restart`\n"
     "- `/scan`\n"
     "- `/search drthorne`\n"
     "- `/search 1802096079`\n"
@@ -234,6 +237,7 @@ def main():
     app.add_handler(CommandHandler("deleteserver", owner.delete_server))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     app.add_handler(CommandHandler("noti", owner.set_notifications))
+    app.add_handler(CommandHandler("restart", owner.restart_bot))
     app.add_handler(CommandHandler("reviewnoti", owner.set_review_notifications))
     app.add_handler(CommandHandler("scan", owner.scan_used_up_keys))
     app.add_handler(CommandHandler("backup", owner.backup_now))
