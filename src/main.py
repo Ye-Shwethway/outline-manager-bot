@@ -141,6 +141,11 @@ async def post_init(application):
     else:
         logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
 
+    try:
+        await application.bot.send_message(chat_id=OWNER_ID, text="The Bot is Online")
+    except Exception as e:
+        logger.warning(f"Failed to send startup online message to owner {OWNER_ID}: {e}")
+
 async def start_command(update: Update, context):
     """The /start command."""
     await update.message.reply_text(
