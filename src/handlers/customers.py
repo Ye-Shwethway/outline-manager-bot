@@ -235,6 +235,16 @@ def _format_user_identity_markdown(user_id: int) -> str:
     return f"`{user_id}`"
 
 
+def _format_username_markdown(username: str | None) -> str:
+    return escape_markdown(f"@{username}", version=1) if username else "(no username)"
+
+
+def _format_text_markdown(value: str | None, default: str = "N/A") -> str:
+    if value is None or str(value).strip() == "":
+        return default
+    return escape_markdown(str(value), version=1)
+
+
 def _build_users_status_text(status: str) -> tuple[str, list[dict]]:
     pending = queries.get_customers_by_status("pending")
     approved = queries.get_customers_by_status("approved")
@@ -341,8 +351,8 @@ async def _notify_registration_reviewers(
     username: str | None,
     first_name: str | None,
 ):
-    uname = f"@{username}" if username else "(no username)"
-    first_name_text = first_name or "N/A"
+    uname = _format_username_markdown(username)
+    first_name_text = _format_text_markdown(first_name)
     text = (
         "🆕 *New User Registration Request*\n\n"
         f"Telegram ID: `{applied_user_id}`\n"
@@ -400,6 +410,7 @@ async def handle_registration_review_callback(update: Update, context: ContextTy
         return
 
     actor = update.effective_user
+    actor_tag = _format_username_markdown(actor.username)
     if action == "a":
         queries.set_customer_status(target_id, "approved", approved_by=actor.id)
         await query.answer("User approved.")
@@ -407,7 +418,7 @@ async def handle_registration_review_callback(update: Update, context: ContextTy
             (
                 "✅ *User Approved via Inline Review*\n\n"
                 f"Target Telegram ID: `{target_id}`\n"
-                f"Reviewed By: @{actor.username or actor.id}\n\n"
+                f"Reviewed By: {actor_tag} (`{actor.id}`)\n\n"
                 "Next: use *Manage This User* below or `/manage` for assignment workflow."
             ),
             parse_mode="Markdown",
@@ -426,7 +437,7 @@ async def handle_registration_review_callback(update: Update, context: ContextTy
             (
                 "⛔ *User Rejected via Inline Review*\n\n"
                 f"Target Telegram ID: `{target_id}`\n"
-                f"Reviewed By: @{actor.username or actor.id}"
+                f"Reviewed By: {actor_tag} (`{actor.id}`)"
             ),
             parse_mode="Markdown",
         )
@@ -735,10 +746,11 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_name = principal.get("first_name") or "N/A"
         role = principal.get("role") or "customer"
         role_label = "👑 OWNER" if role == "owner" else "🛡️ ADMIN" if role == "admin" else "👤 USER"
-        username_text = f"@{username}" if username else "(no username)"
+        username_text = _format_username_markdown(username)
+        first_name_text = _format_text_markdown(first_name)
 
         assigned = assigned_by_user.get(user_id, [])
-        lines.append(f"{role_label} | ID: `{user_id}` | Username: {username_text} | Name: {first_name}")
+        lines.append(f"{role_label} | ID: `{user_id}` | Username: {username_text} | Name: {first_name_text}")
         lines.append(f"Assigned Keys: *{len(assigned)}*")
 
         if assigned:
@@ -860,8 +872,8 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             customer_status = "staff"
             role_line = "👑 OWNER" if principal_type == "owner" else "🛡️ ADMIN"
 
-        uname = f"@{username}" if username else "(no username)"
-        first_name = first_name or "N/A"
+        uname = _format_username_markdown(username)
+        first_name = _format_text_markdown(first_name)
         assigned_count = len(queries.get_user_assigned_keys(target_id))
         can_manage = _can_manage_principal(actor.id, target_id, principal_type)
 
@@ -945,8 +957,8 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("User not found.", show_alert=True)
             return
 
-        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
-        first_name = customer.get("first_name") or "N/A"
+        uname = _format_username_markdown(customer.get("username"))
+        first_name = _format_text_markdown(customer.get("first_name"))
         customer_status = (customer.get("status") or "pending").lower()
         assigned_count = len(queries.get_user_assigned_keys(target_id))
         await query.edit_message_text(
@@ -1025,8 +1037,8 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("User not found.", show_alert=True)
             return
 
-        uname = f"@{customer.get('username')}" if customer.get("username") else "(no username)"
-        first_name = customer.get("first_name") or "N/A"
+        uname = _format_username_markdown(customer.get("username"))
+        first_name = _format_text_markdown(customer.get("first_name"))
         customer_status = (customer.get("status") or "pending").lower()
         assigned_count = len(queries.get_user_assigned_keys(target_id))
         await query.edit_message_text(
