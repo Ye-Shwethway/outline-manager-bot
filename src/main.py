@@ -75,7 +75,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/addserver <alias> <api_url> <cert_sha256>` Add Outline server (owner only)\n"
     "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
-    "- `/keyusage <server_alias> <key_id>` Show raw Outline usage vs tracked effective usage for one key (owner only)\n"
+    "- `/keyusage` Open inline server/key picker for raw Outline usage vs tracked effective usage (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
     "- `/restart` Restart bot process (owner only, data preserved)\n"
@@ -92,6 +92,7 @@ PRIVILEGED_HELP_TEXT = (
     "*Examples*\n"
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
+    "- `/keyusage`\n"
     "- `/keyusage vps1 7`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
@@ -270,6 +271,7 @@ def main():
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postkey_(open|back|close)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_"))
+    app.add_handler(CallbackQueryHandler(owner.handle_key_usage_callback, pattern="^kdiag\|"))
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)

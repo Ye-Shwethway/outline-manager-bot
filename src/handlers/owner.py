@@ -3,6 +3,7 @@ import os
 import time
 import asyncio
 from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes
 from src.utils.decorators import owner_only, admin_only
@@ -10,6 +11,7 @@ from src.database import queries
 from src.services.backup_service import generate_backup_file, get_latest_backup_file
 from src.services.notifier import monitor_used_up_keys
 from src.services.outline_api import get_vpn_client
+from src.utils.inline_messages import clear_if_matches
 
 logger = logging.getLogger(__name__)
 REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS = 120
@@ -25,6 +27,94 @@ def _strip_outline_label(value: str, label: str) -> str:
     """Accept values copied from access.txt lines such as `apiUrl:...`."""
     prefix = f"{label}:"
     return value[len(prefix):].strip() if value.startswith(prefix) else value.strip()
+
+
+def _keyusage_servers_keyboard(servers: dict) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(f"🌐 {alias}", callback_data=f"kdiag|srv|{alias}")]
+        for alias in sorted(servers.keys())
+    ]
+    rows.append([InlineKeyboardButton("❎ Close", callback_data="kdiag|close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _keyusage_keys_keyboard(alias: str, keys: list) -> InlineKeyboardMarkup:
+    rows = []
+    for key in keys[:30]:
+        key_name = str(key.name or "Unnamed")[:18]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"🔑 {key.key_id} | {key_name}",
+                    callback_data=f"kdiag|key|{alias}|{key.key_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back Servers", callback_data="kdiag|servers"),
+            InlineKeyboardButton("❎ Close", callback_data="kdiag|close"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _keyusage_result_keyboard(alias: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("⬅️ Back Keys", callback_data=f"kdiag|srv|{alias}")],
+            [InlineKeyboardButton("🌐 Back Servers", callback_data="kdiag|servers")],
+            [InlineKeyboardButton("❎ Close", callback_data="kdiag|close")],
+        ]
+    )
+
+
+async def _build_keyusage_diagnostic_text(alias: str, key_id: str) -> str | None:
+    client = get_vpn_client(alias)
+    if not client:
+        return None
+
+    keys = client.get_keys()
+    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+    if not target_key:
+        return None
+
+    raw_used_bytes = max(int(target_key.used_bytes or 0), 0)
+    effective_used_bytes = queries.observe_key_usage(alias, str(key_id), raw_used_bytes)
+    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+
+    limit_bytes = int(target_key.data_limit or 0)
+    raw_remaining_bytes = max(limit_bytes - raw_used_bytes, 0) if limit_bytes else 0
+    effective_remaining_bytes = max(limit_bytes - effective_used_bytes, 0) if limit_bytes else 0
+    key_name = escape_markdown(str(target_key.name or 'Unnamed'), version=1)
+
+    if limit_bytes:
+        limit_line = f"{limit_bytes / BYTES_PER_GB:.2f} GB"
+        raw_remaining_line = f"{raw_remaining_bytes / BYTES_PER_GB:.2f} GB"
+        effective_remaining_line = f"{effective_remaining_bytes / BYTES_PER_GB:.2f} GB"
+    else:
+        limit_line = "Unlimited"
+        raw_remaining_line = "Unlimited"
+        effective_remaining_line = "Unlimited"
+
+    return (
+        "🧪 *Key Usage Diagnostic*\n\n"
+        f"Server: `{alias}`\n"
+        f"Key ID: `{key_id}`\n"
+        f"Name: *{key_name}*\n"
+        f"Data Limit: *{limit_line}*\n\n"
+        "*Live Outline Counter*\n"
+        f"Raw Used: *{raw_used_bytes / BYTES_PER_GB:.2f} GB*\n"
+        f"Raw Remaining: *{raw_remaining_line}*\n\n"
+        "*Bot Effective Counter*\n"
+        f"Effective Used: *{effective_used_bytes / BYTES_PER_GB:.2f} GB*\n"
+        f"Effective Remaining: *{effective_remaining_line}*\n\n"
+        "*Tracking State*\n"
+        f"Last Observed Raw: *{int(lifecycle.get('last_observed_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
+        f"Reset Offset: *{int(lifecycle.get('usage_reset_offset_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
+        f"Max Effective Used: *{int(lifecycle.get('max_effective_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
+        f"Last Usage Sync UTC: *{escape_markdown(str(lifecycle.get('last_usage_sync_at_utc') or 'N/A'), version=1)}*"
+    )
 
 
 async def _notify_admins_review_mode_change(context: ContextTypes.DEFAULT_TYPE, enabled: bool) -> tuple[bool, int]:
@@ -339,71 +429,140 @@ async def key_usage_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYP
     if not update.message:
         return
 
+    if len(context.args) == 0:
+        servers = queries.get_servers()
+        if not servers:
+            await update.message.reply_text("No servers configured yet.")
+            return
+
+        await update.message.reply_text(
+            "🧪 *Key Usage Diagnostic*\n\nSelect a server to inspect usage counters.",
+            parse_mode='Markdown',
+            reply_markup=_keyusage_servers_keyboard(servers),
+        )
+        return
+
     if len(context.args) != 2:
         await update.message.reply_text(
-            "Usage: `/keyusage <server_alias> <key_id>`",
+            "Usage: `/keyusage` or `/keyusage <server_alias> <key_id>`",
             parse_mode='Markdown',
         )
         return
 
     alias, key_id = context.args
-    client = get_vpn_client(alias)
-    if not client:
-        await update.message.reply_text(
-            f"❌ Could not connect to server `{alias}`.",
-            parse_mode='Markdown',
-        )
-        return
-
     try:
-        keys = client.get_keys()
+        text = await _build_keyusage_diagnostic_text(alias, key_id)
     except Exception as e:
         logger.error(f"Key usage diagnostic fetch error on {alias}: {e}")
         await update.message.reply_text("❌ Failed to fetch keys from Outline server.")
         return
 
-    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
-    if not target_key:
+    if not text:
         await update.message.reply_text(
-            f"❌ Key `{key_id}` was not found on `{alias}`.",
+            f"❌ Key `{key_id}` was not found on `{alias}` or the server is unreachable.",
             parse_mode='Markdown',
         )
         return
 
-    raw_used_bytes = max(int(target_key.used_bytes or 0), 0)
-    effective_used_bytes = queries.observe_key_usage(alias, str(key_id), raw_used_bytes)
-    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-
-    limit_bytes = int(target_key.data_limit or 0)
-    raw_remaining_bytes = max(limit_bytes - raw_used_bytes, 0) if limit_bytes else 0
-    effective_remaining_bytes = max(limit_bytes - effective_used_bytes, 0) if limit_bytes else 0
-    key_name = escape_markdown(str(target_key.name or 'Unnamed'), version=1)
-
-    if limit_bytes:
-        limit_line = f"{limit_bytes / BYTES_PER_GB:.2f} GB"
-        raw_remaining_line = f"{raw_remaining_bytes / BYTES_PER_GB:.2f} GB"
-        effective_remaining_line = f"{effective_remaining_bytes / BYTES_PER_GB:.2f} GB"
-    else:
-        limit_line = "Unlimited"
-        raw_remaining_line = "Unlimited"
-        effective_remaining_line = "Unlimited"
-
-    text = (
-        "🧪 *Key Usage Diagnostic*\n\n"
-        f"Server: `{alias}`\n"
-        f"Key ID: `{key_id}`\n"
-        f"Name: *{key_name}*\n"
-        f"Data Limit: *{limit_line}*\n\n"
-        "*Live Outline Counter*\n"
-        f"Raw Used: *{raw_used_bytes / BYTES_PER_GB:.2f} GB*\n"
-        f"Raw Remaining: *{raw_remaining_line}*\n\n"
-        "*Bot Effective Counter*\n"
-        f"Effective Used: *{effective_used_bytes / BYTES_PER_GB:.2f} GB*\n"
-        f"Effective Remaining: *{effective_remaining_line}*\n\n"
-        "*Tracking State*\n"
-        f"Last Observed Raw: *{int(lifecycle.get('last_observed_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Reset Offset: *{int(lifecycle.get('usage_reset_offset_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Max Effective Used: *{int(lifecycle.get('max_effective_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Last Usage Sync UTC: *{escape_markdown(str(lifecycle.get('last_usage_sync_at_utc') or 'N/A'), version=1)}*"
-    )
     await update.message.reply_text(text, parse_mode='Markdown')
+
+
+@owner_only
+async def handle_key_usage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    await query.answer()
+    parts = query.data.split("|")
+    if len(parts) < 2 or parts[0] != "kdiag":
+        return
+
+    action = parts[1]
+    if action == "close":
+        await query.edit_message_text("✅ Key usage diagnostic panel closed.")
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return
+
+    if action == "servers":
+        servers = queries.get_servers()
+        if not servers:
+            await query.edit_message_text("No servers configured yet.")
+            return
+        await query.edit_message_text(
+            "🧪 *Key Usage Diagnostic*\n\nSelect a server to inspect usage counters.",
+            parse_mode='Markdown',
+            reply_markup=_keyusage_servers_keyboard(servers),
+        )
+        return
+
+    if action == "srv" and len(parts) == 3:
+        alias = parts[2]
+        client = get_vpn_client(alias)
+        if not client:
+            await query.edit_message_text(
+                f"❌ Could not connect to server `{alias}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Back Servers", callback_data="kdiag|servers")],
+                    [InlineKeyboardButton("❎ Close", callback_data="kdiag|close")],
+                ]),
+            )
+            return
+        try:
+            keys = client.get_keys()
+        except Exception as e:
+            logger.error(f"Key usage diagnostic list error on {alias}: {e}")
+            await query.edit_message_text(
+                f"❌ Failed to fetch keys from `{alias}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Back Servers", callback_data="kdiag|servers")],
+                    [InlineKeyboardButton("❎ Close", callback_data="kdiag|close")],
+                ]),
+            )
+            return
+
+        if not keys:
+            await query.edit_message_text(
+                f"🧪 *Key Usage Diagnostic*\n\nNo keys found on `{alias}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Back Servers", callback_data="kdiag|servers")],
+                    [InlineKeyboardButton("❎ Close", callback_data="kdiag|close")],
+                ]),
+            )
+            return
+
+        await query.edit_message_text(
+            f"🧪 *Key Usage Diagnostic*\n\nSelect a key on `{alias}`.",
+            parse_mode='Markdown',
+            reply_markup=_keyusage_keys_keyboard(alias, keys),
+        )
+        return
+
+    if action == "key" and len(parts) == 4:
+        alias = parts[2]
+        key_id = parts[3]
+        try:
+            text = await _build_keyusage_diagnostic_text(alias, key_id)
+        except Exception as e:
+            logger.error(f"Key usage diagnostic detail error on {alias}/{key_id}: {e}")
+            text = None
+        if not text:
+            await query.edit_message_text(
+                f"❌ Key `{key_id}` was not found on `{alias}` or the server is unreachable.",
+                parse_mode='Markdown',
+                reply_markup=_keyusage_result_keyboard(alias),
+            )
+            return
+
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=_keyusage_result_keyboard(alias),
+        )
+        return
+
+    await query.answer("Unknown diagnostic action.", show_alert=True)
