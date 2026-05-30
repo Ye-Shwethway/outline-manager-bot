@@ -29,7 +29,7 @@ def get_key_management_keyboard(
             InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")
         ],
         [
-            InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")
+            InlineKeyboardButton("⏳ Set Expiry Only", callback_data=f"expiry_{server_alias}_{key_id}")
         ],
         [
             InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
@@ -124,7 +124,7 @@ def get_post_create_manage_keyboard(
     sold_text = "🟢 Keep Available" if is_sold else "🔴 Mark Sold"
     keyboard = [
         [InlineKeyboardButton("🔑 View Key", callback_data=f"view_{server_alias}_{key_id}")],
-        [InlineKeyboardButton("⏳ Set Expiry", callback_data=f"expiry_{server_alias}_{key_id}")],
+        [InlineKeyboardButton("⏳ Set Expiry Only", callback_data=f"expiry_{server_alias}_{key_id}")],
         [
             InlineKeyboardButton("👤 Assign User", callback_data=f"assign_{server_alias}_{key_id}"),
             InlineKeyboardButton("🚫 Unassign", callback_data=f"unassign_{server_alias}_{key_id}"),

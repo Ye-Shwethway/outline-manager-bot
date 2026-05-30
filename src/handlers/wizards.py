@@ -181,7 +181,7 @@ async def handle_post_create_sold_callback(update: Update, context: ContextTypes
         sold_keys = queries.get_sold_keys(alias)
         is_sold = str(key_id) in sold_keys
         lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-        can_renew = bool(lifecycle.get("expiry_at_utc"))
+        can_renew = True
         await query.edit_message_text(
             (
                 "⚙️ *New Key Setup Panel*\n\n"

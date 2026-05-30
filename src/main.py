@@ -32,6 +32,7 @@ ADMIN_OWNER_COMMANDS = {
     "search",
     "newkey",
     "manage",
+    "renew",
     "cancel",
     "noti",
     "scan",
@@ -47,7 +48,7 @@ PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
     "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
-    "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
+    "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/renew`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
@@ -67,7 +68,8 @@ PRIVILEGED_HELP_TEXT = (
     "- `/search <owner_user_id|owner_username|key_name>` Search owners by id/username or assigned key name across servers\n"
     "- `/newkey` Start interactive key creation wizard\n"
     "- `/manage` Open approved-user management flow (assign/unassign keys)\n"
-    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry, Renew, Mark Sold, Delete)\n"
+    "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry Only, Renew, Mark Sold, Delete)\n"
+    "- `/renew` Open button-driven renew flow (choose server, key, duration, quota)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
@@ -104,7 +106,8 @@ PRIVILEGED_HELP_TEXT = (
     "- `/reviewnoti on`\n"
     "- `/backup`\n"
     "- `/autobackup`\n"
-    "- `/manage vps1 7`"
+    "- `/manage vps1 7`\n"
+    "- `/renew`"
 )
 
 USER_HELP_TEXT = (
@@ -254,6 +257,7 @@ def main():
     app.add_handler(CommandHandler("autobackup", owner.get_last_auto_backup))
     app.add_handler(CommandHandler("users", customers.users_overview))
     app.add_handler(CommandHandler("search", customers.search_user))
+    app.add_handler(CommandHandler("renew", lists.renew_key_command))
     app.add_handler(CommandHandler("approve", customers.approve_user))
     app.add_handler(CommandHandler("reject", customers.reject_user))
     app.add_handler(CommandHandler("removeuser", customers.remove_user))
@@ -272,13 +276,13 @@ def main():
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_"))
     app.add_handler(CallbackQueryHandler(owner.handle_key_usage_callback, pattern=r"^kdiag\|"))
+    app.add_handler(CallbackQueryHandler(lists.handle_renew_workflow_callback, pattern=r"^rflow\|"))
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)
 
     # 7.1 Register manual sold-key delete text confirmations
     app.add_handler(MessageHandler(filters.Regex(r"(?i)^(delete|cancel)$"), lists.handle_manual_sold_delete_confirmation))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_renew_quota_input))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_assign_user_input))
 
     # 8. Register Global Error Handler
