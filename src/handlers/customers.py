@@ -550,7 +550,7 @@ def build_mykeys_snapshot_text(user_id: int) -> str:
 
         live_key = server_key_map.get(alias, {}).get(key_id)
         if live_key:
-            used_bytes = live_key.used_bytes or 0
+            used_bytes = queries.observe_key_usage(alias, key_id, live_key.used_bytes or 0)
             used_gb = used_bytes / BYTES_PER_GB
             if live_key.data_limit:
                 limit_bytes = live_key.data_limit

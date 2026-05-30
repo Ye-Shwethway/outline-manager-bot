@@ -73,6 +73,10 @@ def _format_text_markdown(value: str | None, default: str = "N/A") -> str:
     return escape_markdown(str(value), version=1)
 
 
+def _effective_used_bytes(alias: str, key) -> int:
+    return queries.observe_key_usage(alias, str(key.key_id), key.used_bytes or 0)
+
+
 async def _render_key_management_panel(
     query,
     alias: str,
@@ -109,7 +113,8 @@ async def _render_key_management_panel(
     sold_keys = queries.get_sold_keys(alias)
     is_sold = str(key_id) in sold_keys
     lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-    used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+    used_bytes = _effective_used_bytes(alias, target_key)
+    used_gb = used_bytes / BYTES_PER_GB
     if target_key.data_limit:
         limit_gb = target_key.data_limit / BYTES_PER_GB
         usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
@@ -310,11 +315,12 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             return
 
         for key in keys:
-            used_gb = (key.used_bytes or 0) / BYTES_PER_GB
+            used_bytes = _effective_used_bytes(alias, key)
+            used_gb = used_bytes / BYTES_PER_GB
             limit_gb = key.data_limit / BYTES_PER_GB if key.data_limit else "No Limit"
             limit_str = f"{limit_gb:.2f} GB" if isinstance(limit_gb, float) else limit_gb
             lifecycle = queries.get_key_lifecycle(alias, str(key.key_id)) or {}
-            is_used_up = bool(key.data_limit) and (key.used_bytes or 0) >= key.data_limit
+            is_used_up = bool(key.data_limit) and used_bytes >= key.data_limit
             if is_used_up:
                 status_tag = "🟠 [USED UP]"
             elif key.key_id in sold_keys:
@@ -400,7 +406,8 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sold_keys = queries.get_sold_keys(alias)
     is_sold = str(key_id) in sold_keys
     lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-    used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+    used_bytes = _effective_used_bytes(alias, target_key)
+    used_gb = used_bytes / BYTES_PER_GB
     if target_key.data_limit:
         limit_gb = target_key.data_limit / BYTES_PER_GB
         usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
@@ -781,10 +788,11 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             owner_user_id = lifecycle.get("assigned_user_id")
             owner_line = _format_user_identity_markdown(int(owner_user_id)) if owner_user_id else "*Unassigned*"
             renew_count = lifecycle.get("renew_count") or 0
-            used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+            used_bytes = _effective_used_bytes(alias, target_key)
+            used_gb = used_bytes / BYTES_PER_GB
             if target_key.data_limit:
                 limit_gb = target_key.data_limit / BYTES_PER_GB
-                available_bytes = max(target_key.data_limit - (target_key.used_bytes or 0), 0)
+                available_bytes = max(target_key.data_limit - used_bytes, 0)
                 available_gb = available_bytes / BYTES_PER_GB
                 usage_line = f"Available Usage: *{available_gb:.2f} GB* (Used: {used_gb:.2f} GB / {limit_gb:.2f} GB)"
             else:
@@ -857,11 +865,12 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 clear_if_matches(context, query.message.message_id)
             return
 
-        used_gb = (target_key.used_bytes or 0) / BYTES_PER_GB
+        used_bytes = _effective_used_bytes(alias, target_key)
+        used_gb = used_bytes / BYTES_PER_GB
         if target_key.data_limit:
             limit_gb = target_key.data_limit / BYTES_PER_GB
             usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
-            is_used_up = (target_key.used_bytes or 0) >= target_key.data_limit
+            is_used_up = used_bytes >= target_key.data_limit
         else:
             usage_line = f"{used_gb:.2f} GB / Unlimited"
             is_used_up = False

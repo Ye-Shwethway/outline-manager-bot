@@ -54,6 +54,10 @@ def init_db():
                 renew_count INTEGER DEFAULT 0,
                 last_renewed_at_utc TEXT,
                 last_renewed_quota_gb REAL,
+                last_observed_used_bytes INTEGER DEFAULT 0,
+                usage_reset_offset_bytes INTEGER DEFAULT 0,
+                max_effective_used_bytes INTEGER DEFAULT 0,
+                last_usage_sync_at_utc TEXT,
                 created_at_utc TEXT,
                 PRIMARY KEY (server_alias, key_id),
                 FOREIGN KEY (server_alias) REFERENCES servers(alias) ON DELETE CASCADE
@@ -136,6 +140,14 @@ def init_db():
             cursor.execute("ALTER TABLE key_metadata ADD COLUMN last_renewed_at_utc TEXT")
         if "last_renewed_quota_gb" not in key_metadata_columns:
             cursor.execute("ALTER TABLE key_metadata ADD COLUMN last_renewed_quota_gb REAL")
+        if "last_observed_used_bytes" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN last_observed_used_bytes INTEGER DEFAULT 0")
+        if "usage_reset_offset_bytes" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN usage_reset_offset_bytes INTEGER DEFAULT 0")
+        if "max_effective_used_bytes" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN max_effective_used_bytes INTEGER DEFAULT 0")
+        if "last_usage_sync_at_utc" not in key_metadata_columns:
+            cursor.execute("ALTER TABLE key_metadata ADD COLUMN last_usage_sync_at_utc TEXT")
         if "created_at_utc" not in key_metadata_columns:
             cursor.execute("ALTER TABLE key_metadata ADD COLUMN created_at_utc TEXT")
 

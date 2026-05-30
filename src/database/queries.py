@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from src.config import OWNER_ID
 from src.database.connection import get_connection
 
+USAGE_RESET_TOLERANCE_BYTES = 50 * 1_000_000
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -324,11 +326,15 @@ def record_key_renewal(server_alias: str, key_id: str, quota_gb: float | None, r
             SET renew_count = COALESCE(renew_count, 0) + 1,
                 last_renewed_at_utc = ?,
                 last_renewed_quota_gb = ?,
+                last_observed_used_bytes = 0,
+                usage_reset_offset_bytes = 0,
+                max_effective_used_bytes = 0,
+                last_usage_sync_at_utc = ?,
                 is_expired = 0,
                 auto_disabled_at_utc = NULL
             WHERE server_alias = ? AND key_id = ?
             ''',
-            (ts, quota_gb, server_alias, key_id),
+            (ts, quota_gb, ts, server_alias, key_id),
         )
 
 
@@ -345,6 +351,51 @@ def get_key_lifecycle(server_alias: str, key_id: str) -> dict | None:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def observe_key_usage(server_alias: str, key_id: str, live_used_bytes: int | None, observed_at_utc: str | None = None) -> int:
+    """Tracks effective usage so quota cannot increase when upstream counters reset."""
+    ts = observed_at_utc or _utc_now_iso()
+    live_bytes = max(int(live_used_bytes or 0), 0)
+
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        cursor = conn.execute(
+            '''
+            SELECT last_observed_used_bytes, usage_reset_offset_bytes, max_effective_used_bytes
+            FROM key_metadata
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (server_alias, key_id),
+        )
+        row = cursor.fetchone()
+
+        last_observed = int(row["last_observed_used_bytes"] or 0) if row else 0
+        reset_offset = int(row["usage_reset_offset_bytes"] or 0) if row else 0
+        max_effective = int(row["max_effective_used_bytes"] or 0) if row else 0
+
+        if last_observed > live_bytes + USAGE_RESET_TOLERANCE_BYTES:
+            reset_offset += last_observed
+
+        effective_used = reset_offset + live_bytes
+        if effective_used < max_effective:
+            effective_used = max_effective
+        else:
+            max_effective = effective_used
+
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET last_observed_used_bytes = ?,
+                usage_reset_offset_bytes = ?,
+                max_effective_used_bytes = ?,
+                last_usage_sync_at_utc = ?
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (live_bytes, reset_offset, max_effective, ts, server_alias, key_id),
+        )
+
+    return effective_used
 
 
 def list_keys_needing_expiry_check(now_utc: str) -> list[dict]:

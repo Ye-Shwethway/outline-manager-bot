@@ -7,10 +7,10 @@ from src.services.outline_api import get_vpn_client
 logger = logging.getLogger(__name__)
 
 
-def _is_key_used_up(key) -> bool:
+def _is_key_used_up(key, effective_used_bytes: int) -> bool:
     if not key.data_limit:
         return False
-    return (key.used_bytes or 0) >= key.data_limit
+    return effective_used_bytes >= key.data_limit
 
 
 async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
@@ -40,12 +40,13 @@ async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
         for key in keys:
             result["keys_scanned"] += 1
             key_id = str(key.key_id)
-            used_up = _is_key_used_up(key)
+            effective_used_bytes = queries.observe_key_usage(alias, key_id, key.used_bytes or 0)
+            used_up = _is_key_used_up(key, effective_used_bytes)
             already_notified = queries.is_key_used_up_notified(alias, key_id)
 
             if used_up and not already_notified:
                 key_name = key.name or "Unnamed"
-                used_gb = (key.used_bytes or 0) / 1_000_000_000
+                used_gb = effective_used_bytes / 1_000_000_000
                 limit_gb = key.data_limit / 1_000_000_000
                 text = (
                     "⚠️ *Key Used Up Alert*\n\n"
