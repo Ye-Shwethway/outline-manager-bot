@@ -32,3 +32,10 @@ def to_yangon_display(value: str | None, fmt: str = '%d-%m-%Y %I:%M %p') -> str:
     if dt is None:
         return 'N/A'
     return dt.astimezone(YANGON_TZ).strftime(fmt)
+
+
+def to_utc_display(value: str | None, fmt: str = '%d-%m-%Y %I:%M %p UTC') -> str:
+    dt = parse_utc_iso(value)
+    if dt is None:
+        return 'N/A'
+    return dt.astimezone(timezone.utc).strftime(fmt)

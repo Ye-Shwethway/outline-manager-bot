@@ -12,6 +12,7 @@ from src.services.backup_service import generate_backup_file, get_latest_backup_
 from src.services.notifier import monitor_used_up_keys
 from src.services.outline_api import get_vpn_client
 from src.utils.inline_messages import clear_if_matches
+from src.utils.datetime_utils import to_utc_display
 
 logger = logging.getLogger(__name__)
 REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS = 120
@@ -113,7 +114,7 @@ async def _build_keyusage_diagnostic_text(alias: str, key_id: str) -> str | None
         f"Last Observed Raw: *{int(lifecycle.get('last_observed_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
         f"Reset Offset: *{int(lifecycle.get('usage_reset_offset_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
         f"Max Effective Used: *{int(lifecycle.get('max_effective_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Last Usage Sync UTC: *{escape_markdown(str(lifecycle.get('last_usage_sync_at_utc') or 'N/A'), version=1)}*"
+        f"Last Usage Sync UTC: *{escape_markdown(to_utc_display(lifecycle.get('last_usage_sync_at_utc')), version=1)}*"
     )
 
 
