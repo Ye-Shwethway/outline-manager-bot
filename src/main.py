@@ -266,12 +266,12 @@ def main():
     
     # 6. Register Callbacks (Inline Buttons)
     app.add_handler(CallbackQueryHandler(lists.handle_listkeys_callback, pattern="^listkeys_"))
-    app.add_handler(CallbackQueryHandler(lists.handle_user_manage_callback, pattern="^umgr\|"))
+    app.add_handler(CallbackQueryHandler(lists.handle_user_manage_callback, pattern=r"^umgr\|"))
     app.add_handler(CallbackQueryHandler(lists.handle_key_actions_callback, pattern="^(view|toggle|delete|delyes|delno|expiry|expd30|expd90|expd180|expd360|expclr|expcancel|renew|rnd30|rnd90|rnd180|rnd360|rncancel|assign|unassign|close)_"))
     app.add_handler(CallbackQueryHandler(wizards.handle_post_create_sold_callback, pattern="^postkey_(open|back|close)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_"))
-    app.add_handler(CallbackQueryHandler(owner.handle_key_usage_callback, pattern="^kdiag\|"))
+    app.add_handler(CallbackQueryHandler(owner.handle_key_usage_callback, pattern=r"^kdiag\|"))
     
     # 7. Register Wizards
     app.add_handler(wizards.newkey_conv_handler)
