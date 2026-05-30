@@ -92,6 +92,64 @@ def init_db():
             )
         ''')
 
+        # 3.3 Key accounting totals (durable lifetime stats per key).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS key_accounting_totals (
+                server_alias TEXT NOT NULL,
+                key_id TEXT NOT NULL,
+                current_assigned_user_id INTEGER,
+                total_purchased_bytes INTEGER DEFAULT 0,
+                total_consumed_bytes INTEGER DEFAULT 0,
+                total_renewed_bytes INTEGER DEFAULT 0,
+                purchase_event_count INTEGER DEFAULT 0,
+                renewal_event_count INTEGER DEFAULT 0,
+                unlimited_grant_count INTEGER DEFAULT 0,
+                last_grant_bytes INTEGER DEFAULT 0,
+                last_grant_unlimited BOOLEAN DEFAULT 0,
+                last_grant_at_utc TEXT,
+                last_consumed_at_utc TEXT,
+                created_at_utc TEXT,
+                updated_at_utc TEXT,
+                PRIMARY KEY (server_alias, key_id),
+                FOREIGN KEY (server_alias) REFERENCES servers(alias) ON DELETE CASCADE
+            )
+        ''')
+
+        # 3.4 Customer accounting totals (durable lifetime stats per customer).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS customer_accounting_totals (
+                user_id INTEGER PRIMARY KEY,
+                total_purchased_bytes INTEGER DEFAULT 0,
+                total_consumed_bytes INTEGER DEFAULT 0,
+                total_renewed_bytes INTEGER DEFAULT 0,
+                purchase_event_count INTEGER DEFAULT 0,
+                renewal_event_count INTEGER DEFAULT 0,
+                unlimited_grant_count INTEGER DEFAULT 0,
+                last_grant_bytes INTEGER DEFAULT 0,
+                last_grant_unlimited BOOLEAN DEFAULT 0,
+                first_recorded_at_utc TEXT,
+                last_grant_at_utc TEXT,
+                last_consumed_at_utc TEXT,
+                updated_at_utc TEXT
+            )
+        ''')
+
+        # 3.5 Durable accounting event ledger for backup and future loyalty analytics.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS service_accounting_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_alias TEXT NOT NULL,
+                key_id TEXT NOT NULL,
+                customer_user_id INTEGER,
+                event_type TEXT NOT NULL,
+                purchased_bytes INTEGER DEFAULT 0,
+                consumed_bytes INTEGER DEFAULT 0,
+                is_unlimited BOOLEAN DEFAULT 0,
+                metadata_json TEXT,
+                created_at_utc TEXT
+            )
+        ''')
+
         # 4. Notification Settings Table (single-row config)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS notification_settings (
@@ -191,6 +249,15 @@ def init_db():
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_server_key_time ON key_lifecycle_events (server_alias, key_id, created_at_utc)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_key_accounting_assigned_user ON key_accounting_totals (current_assigned_user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_service_accounting_key_time ON service_accounting_events (server_alias, key_id, created_at_utc)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_service_accounting_customer_time ON service_accounting_events (customer_user_id, created_at_utc)"
         )
         
         conn.commit()

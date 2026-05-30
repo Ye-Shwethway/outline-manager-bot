@@ -76,6 +76,18 @@ def _effective_used_bytes(alias: str, key) -> int:
     return queries.observe_key_usage(alias, str(key.key_id), key.used_bytes or 0)
 
 
+def _format_lifetime_bytes(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
+    bytes_value = max(int(total_bytes or 0), 0)
+    unlimited_value = max(int(unlimited_count or 0), 0)
+    if bytes_value <= 0 and unlimited_value <= 0:
+        return "0.00 GB"
+    if unlimited_value <= 0:
+        return f"{bytes_value / BYTES_PER_GB:.2f} GB"
+    if bytes_value <= 0:
+        return f"Unlimited x{unlimited_value}"
+    return f"{bytes_value / BYTES_PER_GB:.2f} GB + Unlimited x{unlimited_value}"
+
+
 def _renew_servers_keyboard(servers: dict) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(f"🌐 {alias}", callback_data=f"rflow|srv|{alias}")]
@@ -194,6 +206,7 @@ def _build_renew_key_snapshot(alias: str, key_id: str) -> tuple[dict | None, str
     expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
     assigned_user_id = lifecycle.get("assigned_user_id")
     owner_line = _format_user_identity_markdown(int(assigned_user_id)) if assigned_user_id else "*Unassigned*"
+    accounting = queries.get_key_accounting_totals(alias, str(key_id)) or {}
 
     return {
         "server_alias": alias,
@@ -207,6 +220,11 @@ def _build_renew_key_snapshot(alias: str, key_id: str) -> tuple[dict | None, str
         "renew_count": lifecycle.get("renew_count") or 0,
         "status_line": status_line,
         "auto_disabled_at_utc": lifecycle.get("auto_disabled_at_utc"),
+        "lifetime_bought_line": _format_lifetime_bytes(
+            accounting.get("total_purchased_bytes"),
+            accounting.get("unlimited_grant_count"),
+        ),
+        "lifetime_used_line": _format_lifetime_bytes(accounting.get("total_consumed_bytes")),
     }, None
 
 
@@ -220,6 +238,8 @@ def _render_renew_key_snapshot_text(snapshot: dict, footer: str) -> str:
         f"Current Quota: *{snapshot['quota_line']}*\n"
         f"Current Usage: {snapshot['usage_line']}\n"
         f"Current Expiry (Yangon): *{snapshot['expiry_line']}*\n"
+        f"Lifetime Bought: *{snapshot['lifetime_bought_line']}*\n"
+        f"Lifetime Used: *{snapshot['lifetime_used_line']}*\n"
         f"Owner: {snapshot['owner_line']}\n"
         f"Renew Count: *{snapshot['renew_count']}*\n\n"
         f"{footer}"
@@ -417,6 +437,12 @@ async def _render_key_management_panel(
     expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
     assigned_user_id = lifecycle.get("assigned_user_id")
     owner_line = _format_user_identity_markdown(int(assigned_user_id)) if assigned_user_id else "*Unassigned*"
+    accounting = queries.get_key_accounting_totals(alias, str(key_id)) or {}
+    lifetime_bought_line = _format_lifetime_bytes(
+        accounting.get("total_purchased_bytes"),
+        accounting.get("unlimited_grant_count"),
+    )
+    lifetime_used_line = _format_lifetime_bytes(accounting.get("total_consumed_bytes"))
     notice_line = f"{notice}\n\n" if notice else ""
 
     await query.edit_message_text(
@@ -428,6 +454,8 @@ async def _render_key_management_panel(
             f"Name: *{_format_text_markdown(target_key.name, default='Unnamed')}*\n"
             f"Usage: {usage_line}\n"
             f"Expiry: *{expiry_line}*\n"
+            f"Lifetime Bought: *{lifetime_bought_line}*\n"
+            f"Lifetime Used: *{lifetime_used_line}*\n"
             f"Owner: {owner_line}\n\n"
             "Use buttons below to continue, then close manually when done."
         ),
@@ -1582,6 +1610,22 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
             quota_gb,
             renewed_at_utc=now_utc,
             baseline_used_bytes=baseline_used_bytes,
+        )
+        assigned_user_id = int(lifecycle["assigned_user_id"]) if lifecycle.get("assigned_user_id") else None
+        queries.record_key_data_grant(
+            alias,
+            key_id,
+            _quota_bytes_from_gb(quota_gb) if quota_gb > 0 else 0,
+            customer_user_id=assigned_user_id,
+            is_renewal=True,
+            is_unlimited=quota_gb == 0,
+            created_at_utc=now_utc,
+            metadata={
+                "source": "manual_renew",
+                "days": days,
+                "renewed_by_user_id": user.id,
+                "renewed_by_username": actor_username or user.username,
+            },
         )
 
         if days is None:

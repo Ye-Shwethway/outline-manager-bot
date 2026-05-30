@@ -25,6 +25,263 @@ def _ensure_key_metadata_row(conn, server_alias: str, key_id: str):
             (server_alias, key_id, False, False, False, 0, _utc_now_iso()),
         )
 
+
+def _ensure_key_accounting_row(conn, server_alias: str, key_id: str):
+    cursor = conn.execute(
+        'SELECT 1 FROM key_accounting_totals WHERE server_alias = ? AND key_id = ?',
+        (server_alias, key_id),
+    )
+    if not cursor.fetchone():
+        now_utc = _utc_now_iso()
+        conn.execute(
+            '''
+            INSERT INTO key_accounting_totals (
+                server_alias, key_id, created_at_utc, updated_at_utc
+            )
+            VALUES (?, ?, ?, ?)
+            ''',
+            (server_alias, key_id, now_utc, now_utc),
+        )
+
+
+def _ensure_customer_accounting_row(conn, user_id: int):
+    cursor = conn.execute(
+        'SELECT 1 FROM customer_accounting_totals WHERE user_id = ?',
+        (user_id,),
+    )
+    if not cursor.fetchone():
+        now_utc = _utc_now_iso()
+        conn.execute(
+            '''
+            INSERT INTO customer_accounting_totals (
+                user_id, first_recorded_at_utc, updated_at_utc
+            )
+            VALUES (?, ?, ?)
+            ''',
+            (user_id, now_utc, now_utc),
+        )
+
+
+def _record_accounting_event(
+    conn,
+    server_alias: str,
+    key_id: str,
+    event_type: str,
+    customer_user_id: int | None = None,
+    purchased_bytes: int = 0,
+    consumed_bytes: int = 0,
+    is_unlimited: bool = False,
+    metadata: dict | None = None,
+    created_at_utc: str | None = None,
+):
+    ts = created_at_utc or _utc_now_iso()
+    purchased_value = max(int(purchased_bytes or 0), 0)
+    consumed_value = max(int(consumed_bytes or 0), 0)
+    unlimited_value = bool(is_unlimited)
+
+    _ensure_key_accounting_row(conn, server_alias, key_id)
+    conn.execute(
+        '''
+        INSERT INTO service_accounting_events (
+            server_alias, key_id, customer_user_id, event_type,
+            purchased_bytes, consumed_bytes, is_unlimited, metadata_json, created_at_utc
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''',
+        (
+            server_alias,
+            key_id,
+            customer_user_id,
+            event_type,
+            purchased_value,
+            consumed_value,
+            unlimited_value,
+            json.dumps(metadata or {}, ensure_ascii=False),
+            ts,
+        ),
+    )
+
+    purchase_event_increment = 1 if event_type == 'grant' else 0
+    renewal_event_increment = 1 if event_type == 'renewal_grant' else 0
+    renewed_bytes_increment = purchased_value if event_type == 'renewal_grant' else 0
+
+    conn.execute(
+        '''
+        UPDATE key_accounting_totals
+        SET total_purchased_bytes = total_purchased_bytes + ?,
+            total_consumed_bytes = total_consumed_bytes + ?,
+            total_renewed_bytes = total_renewed_bytes + ?,
+            purchase_event_count = purchase_event_count + ?,
+            renewal_event_count = renewal_event_count + ?,
+            unlimited_grant_count = unlimited_grant_count + ?,
+            last_grant_bytes = CASE WHEN ? > 0 OR ? THEN ? ELSE last_grant_bytes END,
+            last_grant_unlimited = CASE WHEN ? > 0 OR ? THEN ? ELSE last_grant_unlimited END,
+            last_grant_at_utc = CASE WHEN ? > 0 OR ? THEN ? ELSE last_grant_at_utc END,
+            last_consumed_at_utc = CASE WHEN ? > 0 THEN ? ELSE last_consumed_at_utc END,
+            updated_at_utc = ?
+        WHERE server_alias = ? AND key_id = ?
+        ''',
+        (
+            purchased_value,
+            consumed_value,
+            renewed_bytes_increment,
+            purchase_event_increment,
+            renewal_event_increment,
+            1 if unlimited_value else 0,
+            purchased_value,
+            1 if unlimited_value else 0,
+            purchased_value,
+            purchased_value,
+            1 if unlimited_value else 0,
+            1 if unlimited_value else 0,
+            purchased_value,
+            1 if unlimited_value else 0,
+            ts,
+            consumed_value,
+            ts,
+            ts,
+            server_alias,
+            key_id,
+        ),
+    )
+
+    if customer_user_id is not None:
+        _ensure_customer_accounting_row(conn, int(customer_user_id))
+        conn.execute(
+            '''
+            UPDATE customer_accounting_totals
+            SET total_purchased_bytes = total_purchased_bytes + ?,
+                total_consumed_bytes = total_consumed_bytes + ?,
+                total_renewed_bytes = total_renewed_bytes + ?,
+                purchase_event_count = purchase_event_count + ?,
+                renewal_event_count = renewal_event_count + ?,
+                unlimited_grant_count = unlimited_grant_count + ?,
+                last_grant_bytes = CASE WHEN ? > 0 OR ? THEN ? ELSE last_grant_bytes END,
+                last_grant_unlimited = CASE WHEN ? > 0 OR ? THEN ? ELSE last_grant_unlimited END,
+                last_grant_at_utc = CASE WHEN ? > 0 OR ? THEN ? ELSE last_grant_at_utc END,
+                last_consumed_at_utc = CASE WHEN ? > 0 THEN ? ELSE last_consumed_at_utc END,
+                updated_at_utc = ?
+            WHERE user_id = ?
+            ''',
+            (
+                purchased_value,
+                consumed_value,
+                renewed_bytes_increment,
+                purchase_event_increment,
+                renewal_event_increment,
+                1 if unlimited_value else 0,
+                purchased_value,
+                1 if unlimited_value else 0,
+                purchased_value,
+                purchased_value,
+                1 if unlimited_value else 0,
+                1 if unlimited_value else 0,
+                purchased_value,
+                1 if unlimited_value else 0,
+                ts,
+                consumed_value,
+                ts,
+                ts,
+                int(customer_user_id),
+            ),
+        )
+
+
+def record_key_data_grant(
+    server_alias: str,
+    key_id: str,
+    quota_bytes: int | None,
+    customer_user_id: int | None = None,
+    *,
+    is_renewal: bool = False,
+    is_unlimited: bool = False,
+    created_at_utc: str | None = None,
+    metadata: dict | None = None,
+):
+    grant_bytes = max(int(quota_bytes or 0), 0)
+    with get_connection() as conn:
+        _record_accounting_event(
+            conn,
+            server_alias,
+            key_id,
+            event_type='renewal_grant' if is_renewal else 'grant',
+            customer_user_id=customer_user_id,
+            purchased_bytes=grant_bytes,
+            consumed_bytes=0,
+            is_unlimited=is_unlimited,
+            metadata=metadata,
+            created_at_utc=created_at_utc,
+        )
+
+
+def get_key_accounting_totals(server_alias: str, key_id: str) -> dict | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT server_alias, key_id, current_assigned_user_id,
+                   total_purchased_bytes, total_consumed_bytes, total_renewed_bytes,
+                   purchase_event_count, renewal_event_count, unlimited_grant_count,
+                   last_grant_bytes, last_grant_unlimited, last_grant_at_utc,
+                   last_consumed_at_utc, created_at_utc, updated_at_utc
+            FROM key_accounting_totals
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (server_alias, key_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_customer_accounting_totals(user_id: int) -> dict | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT user_id, total_purchased_bytes, total_consumed_bytes, total_renewed_bytes,
+                   purchase_event_count, renewal_event_count, unlimited_grant_count,
+                   last_grant_bytes, last_grant_unlimited, first_recorded_at_utc,
+                   last_grant_at_utc, last_consumed_at_utc, updated_at_utc
+            FROM customer_accounting_totals
+            WHERE user_id = ?
+            ''',
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_service_accounting_events(
+    server_alias: str | None = None,
+    key_id: str | None = None,
+    customer_user_id: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    where_clauses = []
+    params: list = []
+    if server_alias is not None:
+        where_clauses.append('server_alias = ?')
+        params.append(server_alias)
+    if key_id is not None:
+        where_clauses.append('key_id = ?')
+        params.append(key_id)
+    if customer_user_id is not None:
+        where_clauses.append('customer_user_id = ?')
+        params.append(customer_user_id)
+
+    where_sql = ('WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f'''
+            SELECT id, server_alias, key_id, customer_user_id, event_type,
+                   purchased_bytes, consumed_bytes, is_unlimited, metadata_json, created_at_utc
+            FROM service_accounting_events
+            {where_sql}
+            ORDER BY id DESC
+            LIMIT ?
+            ''',
+            (*params, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
 # --- Admin Operations ---
 def add_admin(user_id: int, username: str | None = None) -> bool:
     try:
@@ -278,6 +535,7 @@ def set_key_expiry(server_alias: str, key_id: str, expiry_at_utc: str | None):
 def set_key_assignment(server_alias: str, key_id: str, assigned_user_id: int | None):
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
+        _ensure_key_accounting_row(conn, server_alias, key_id)
         conn.execute(
             '''
             UPDATE key_metadata
@@ -285,6 +543,14 @@ def set_key_assignment(server_alias: str, key_id: str, assigned_user_id: int | N
             WHERE server_alias = ? AND key_id = ?
             ''',
             (assigned_user_id, server_alias, key_id),
+        )
+        conn.execute(
+            '''
+            UPDATE key_accounting_totals
+            SET current_assigned_user_id = ?, updated_at_utc = ?
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (assigned_user_id, _utc_now_iso(), server_alias, key_id),
         )
 
 
@@ -327,6 +593,7 @@ def record_key_renewal(
     baseline_bytes = max(int(baseline_used_bytes or 0), 0)
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
+        _ensure_key_accounting_row(conn, server_alias, key_id)
         conn.execute(
             '''
             UPDATE key_metadata
@@ -371,7 +638,7 @@ def observe_key_usage(server_alias: str, key_id: str, live_used_bytes: int | Non
         _ensure_key_metadata_row(conn, server_alias, key_id)
         cursor = conn.execute(
             '''
-            SELECT last_observed_used_bytes, usage_reset_offset_bytes, max_effective_used_bytes
+            SELECT last_observed_used_bytes, usage_reset_offset_bytes, max_effective_used_bytes, assigned_user_id
             FROM key_metadata
             WHERE server_alias = ? AND key_id = ?
             ''',
@@ -382,6 +649,8 @@ def observe_key_usage(server_alias: str, key_id: str, live_used_bytes: int | Non
         last_observed = int(row["last_observed_used_bytes"] or 0) if row else 0
         reset_offset = int(row["usage_reset_offset_bytes"] or 0) if row else 0
         max_effective = int(row["max_effective_used_bytes"] or 0) if row else 0
+        assigned_user_id = int(row["assigned_user_id"]) if row and row["assigned_user_id"] else None
+        previous_max_effective = max_effective
 
         if last_observed > live_bytes + USAGE_RESET_TOLERANCE_BYTES:
             reset_offset += last_observed
@@ -391,6 +660,8 @@ def observe_key_usage(server_alias: str, key_id: str, live_used_bytes: int | Non
             effective_used = max_effective
         else:
             max_effective = effective_used
+
+        consumed_delta = max(effective_used - previous_max_effective, 0)
 
         conn.execute(
             '''
@@ -403,6 +674,25 @@ def observe_key_usage(server_alias: str, key_id: str, live_used_bytes: int | Non
             ''',
             (live_bytes, reset_offset, max_effective, ts, server_alias, key_id),
         )
+
+        _ensure_key_accounting_row(conn, server_alias, key_id)
+        if consumed_delta > 0:
+            _record_accounting_event(
+                conn,
+                server_alias,
+                key_id,
+                event_type='usage_delta',
+                customer_user_id=assigned_user_id,
+                purchased_bytes=0,
+                consumed_bytes=consumed_delta,
+                is_unlimited=False,
+                metadata={
+                    'live_used_bytes': live_bytes,
+                    'effective_used_bytes': effective_used,
+                    'delta_bytes': consumed_delta,
+                },
+                created_at_utc=ts,
+            )
 
     return effective_used
 
