@@ -69,7 +69,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/newkey` Start interactive key creation wizard\n"
     "- `/manage` Open approved-user management flow (assign/unassign keys)\n"
     "- `/manage <server_alias> <key_id>` Open key actions (View URL, Set Expiry Only, Renew, Mark Sold, Delete)\n"
-    "- `/renew` Open button-driven renew flow (choose server, key, duration, quota)\n"
+    "- `/renew` Open renew flow (choose server/key, then manual quota with optional expiry update)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
@@ -283,6 +283,7 @@ def main():
 
     # 7.1 Register manual sold-key delete text confirmations
     app.add_handler(MessageHandler(filters.Regex(r"(?i)^(delete|cancel)$"), lists.handle_manual_sold_delete_confirmation))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_renew_quota_input))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lists.handle_manual_assign_user_input))
 
     # 8. Register Global Error Handler

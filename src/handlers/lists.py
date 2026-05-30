@@ -6,7 +6,7 @@ from src.utils.decorators import admin_only
 from src.config import OWNER_ID
 from src.database import queries
 from src.services.outline_api import get_vpn_client
-from src.utils.datetime_utils import utc_now_iso, add_days_from_utc, to_yangon_display
+from src.utils.datetime_utils import utc_now_iso, add_days_from_utc, to_yangon_display, parse_utc_iso
 from src.utils.keyboards import (
     get_server_list_keyboard,
     get_key_management_keyboard,
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 BYTES_PER_MB = 1_000_000
 BYTES_PER_GB = 1_000_000_000
 PENDING_DELETE_KEY = "pending_sold_delete"
+PENDING_RENEW_KEY = "pending_renew"
 PENDING_ASSIGN_KEY = "pending_assign"
 
 
@@ -122,27 +123,106 @@ def _renew_duration_keyboard(alias: str, key_id: str) -> InlineKeyboardMarkup:
     )
 
 
-def _renew_quota_keyboard(alias: str, key_id: str, days: int) -> InlineKeyboardMarkup:
+def _renew_action_keyboard(alias: str, key_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("10 GB", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|10"),
-                InlineKeyboardButton("20 GB", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|20"),
+                InlineKeyboardButton("✍️ Renew Quota Only", callback_data=f"rflow|quotaonly|{alias}|{key_id}"),
             ],
             [
-                InlineKeyboardButton("30 GB", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|30"),
-                InlineKeyboardButton("50 GB", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|50"),
+                InlineKeyboardButton("⏳ Renew Quota + Expiry", callback_data=f"rflow|expiry|{alias}|{key_id}"),
             ],
             [
-                InlineKeyboardButton("100 GB", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|100"),
-                InlineKeyboardButton("200 GB", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|200"),
-            ],
-            [InlineKeyboardButton("Unlimited", callback_data=f"rflow|quota|{alias}|{key_id}|{days}|0")],
-            [
-                InlineKeyboardButton("⬅️ Back Duration", callback_data=f"rflow|key|{alias}|{key_id}"),
+                InlineKeyboardButton("⬅️ Back Keys", callback_data=f"rflow|srv|{alias}"),
                 InlineKeyboardButton("❎ Close", callback_data="rflow|close"),
             ],
         ]
+    )
+
+
+def _renew_expiry_back_keyboard(alias: str, key_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("⬅️ Back Renew Options", callback_data=f"rflow|key|{alias}|{key_id}"),
+                InlineKeyboardButton("❎ Close", callback_data="rflow|close"),
+            ],
+        ]
+    )
+
+
+def _build_renew_key_snapshot(alias: str, key_id: str) -> tuple[dict | None, str | None]:
+    client = get_vpn_client(alias)
+    if not client:
+        return None, f"❌ Could not connect to server `{alias}`."
+
+    try:
+        keys = client.get_keys()
+    except Exception as e:
+        logger.error(f"Renew snapshot fetch error on {alias}: {e}")
+        return None, f"❌ Failed to fetch key `{key_id}` from `{alias}`."
+
+    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+    if not target_key:
+        return None, f"❌ Key `{key_id}` was not found on `{alias}`."
+
+    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+    sold_keys = queries.get_sold_keys(alias)
+    is_sold = str(key_id) in sold_keys
+    used_bytes = _effective_used_bytes(alias, target_key)
+    used_gb = used_bytes / BYTES_PER_GB
+
+    if target_key.data_limit:
+        limit_gb = target_key.data_limit / BYTES_PER_GB
+        quota_line = f"{limit_gb:.2f} GB"
+        usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
+        is_used_up = used_bytes >= target_key.data_limit
+    else:
+        quota_line = "Unlimited"
+        usage_line = f"{used_gb:.2f} GB / Unlimited"
+        is_used_up = False
+
+    if is_used_up:
+        status_line = "🟠 USED UP"
+    elif is_sold:
+        status_line = "🔴 SOLD"
+    else:
+        status_line = "🟢 AVAILABLE"
+
+    expiry_at_utc = lifecycle.get("expiry_at_utc")
+    expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
+    expiry_line = f"{to_yangon_display(expiry_at_utc)} ({expiry_state})" if expiry_at_utc else "Not set"
+    assigned_user_id = lifecycle.get("assigned_user_id")
+    owner_line = _format_user_identity_markdown(int(assigned_user_id)) if assigned_user_id else "*Unassigned*"
+
+    return {
+        "server_alias": alias,
+        "key_id": str(target_key.key_id),
+        "name": _format_text_markdown(target_key.name, default="Unnamed"),
+        "usage_line": usage_line,
+        "quota_line": quota_line,
+        "expiry_at_utc": expiry_at_utc,
+        "expiry_line": expiry_line,
+        "owner_line": owner_line,
+        "renew_count": lifecycle.get("renew_count") or 0,
+        "status_line": status_line,
+        "auto_disabled_at_utc": lifecycle.get("auto_disabled_at_utc"),
+    }, None
+
+
+def _render_renew_key_snapshot_text(snapshot: dict, footer: str) -> str:
+    return (
+        "🔄 *Renew Key*\n\n"
+        f"Server: `{snapshot['server_alias']}`\n"
+        f"Key ID: `{snapshot['key_id']}`\n"
+        f"Name: *{snapshot['name']}*\n"
+        f"Status: *{snapshot['status_line']}*\n"
+        f"Current Quota: *{snapshot['quota_line']}*\n"
+        f"Current Usage: {snapshot['usage_line']}\n"
+        f"Current Expiry (Yangon): *{snapshot['expiry_line']}*\n"
+        f"Owner: {snapshot['owner_line']}\n"
+        f"Renew Count: *{snapshot['renew_count']}*\n\n"
+        f"{footer}"
     )
 
 
@@ -210,36 +290,69 @@ async def _show_renew_key_picker(query, alias: str):
     )
 
 
-async def _show_renew_duration_picker(query, alias: str, key_id: str):
-    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-    expiry_at_utc = lifecycle.get("expiry_at_utc")
-    current_expiry = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
+async def _show_renew_action_picker(query, alias: str, key_id: str):
+    snapshot, error_text = _build_renew_key_snapshot(alias, key_id)
+    if error_text:
+        await query.edit_message_text(error_text, parse_mode='Markdown')
+        return
+
     await query.edit_message_text(
-        (
-            "🔄 *Renew Key*\n\n"
-            f"Server: `{alias}`\n"
-            f"Key ID: `{key_id}`\n"
-            f"Current Expiry (Yangon): *{current_expiry}*\n\n"
-            "This renew flow updates *quota and expiry together*.\n"
-            "Choose the renewal duration first."
+        _render_renew_key_snapshot_text(
+            snapshot,
+            "Choose what to renew.\n"
+            "Quota Only keeps the current expiry unchanged.\n"
+            "Quota + Expiry will also set a new expiry from now.",
+        ),
+        parse_mode='Markdown',
+        reply_markup=_renew_action_keyboard(alias, key_id),
+    )
+
+
+async def _show_renew_duration_picker(query, alias: str, key_id: str):
+    snapshot, error_text = _build_renew_key_snapshot(alias, key_id)
+    if error_text:
+        await query.edit_message_text(error_text, parse_mode='Markdown')
+        return
+
+    await query.edit_message_text(
+        _render_renew_key_snapshot_text(
+            snapshot,
+            "Choose the expiry extension first.\n"
+            "After that, you will type the new quota manually.",
         ),
         parse_mode='Markdown',
         reply_markup=_renew_duration_keyboard(alias, key_id),
     )
 
 
-async def _show_renew_quota_picker(query, alias: str, key_id: str, days: int):
+async def _prompt_manual_renew_quota(query, context: ContextTypes.DEFAULT_TYPE, alias: str, key_id: str, days: int | None):
+    snapshot, error_text = _build_renew_key_snapshot(alias, key_id)
+    if error_text:
+        await query.edit_message_text(error_text, parse_mode='Markdown')
+        return
+
+    context.user_data[PENDING_RENEW_KEY] = {
+        "alias": alias,
+        "key_id": str(key_id),
+        "days": days,
+        "actor_user_id": query.from_user.id if query.from_user else None,
+        "actor_username": query.from_user.username if query.from_user else None,
+    }
+
+    footer = (
+        "Send the new quota in your next message.\n"
+        "Examples: `50`, `75.5`, `0`, or `unlimited`.\n"
+        "Type `cancel` to abort."
+    )
+    if days is None:
+        footer = "Quota-only renew selected. Expiry will stay unchanged.\n\n" + footer
+    else:
+        footer = f"Quota + Expiry selected. New expiry will be *+{days} days from now*.\n\n" + footer
+
     await query.edit_message_text(
-        (
-            "🔄 *Renew Key*\n\n"
-            f"Server: `{alias}`\n"
-            f"Key ID: `{key_id}`\n"
-            f"Duration: *+{days} days*\n\n"
-            "Choose the new quota.\n"
-            "This works even if the key currently has *no expiry set*."
-        ),
+        _render_renew_key_snapshot_text(snapshot, footer),
         parse_mode='Markdown',
-        reply_markup=_renew_quota_keyboard(alias, key_id, days),
+        reply_markup=_renew_expiry_back_keyboard(alias, key_id),
     )
 
 
@@ -248,7 +361,7 @@ def _quota_bytes_from_gb(quota_gb: float) -> int:
 
 
 async def renew_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /renew - open button-driven renew flow."""
+    """Command: /renew - open renew workflow with inline pickers and manual quota input."""
     if not update.message:
         return
     await _show_renew_server_picker(update, context)
@@ -1225,7 +1338,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
 
     elif action == "renew":
         await query.answer()
-        await _show_renew_duration_picker(query, alias, str(key_id))
+        await _show_renew_action_picker(query, alias, str(key_id))
 
     elif action in {"rnd30", "rnd90", "rnd180", "rnd360"}:
         await query.answer()
@@ -1236,7 +1349,7 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             "rnd360": 360,
         }
         days = day_map[action]
-        await _show_renew_quota_picker(query, alias, str(key_id), days)
+        await _prompt_manual_renew_quota(query, context, alias, str(key_id), days)
 
     elif action == "rncancel":
         await query.answer("Cancelled.")
@@ -1366,71 +1479,140 @@ async def handle_renew_workflow_callback(update: Update, context: ContextTypes.D
         return
 
     if action == "key" and len(parts) == 4:
+        await _show_renew_action_picker(query, parts[2], parts[3])
+        return
+
+    if action == "quotaonly" and len(parts) == 4:
+        await _prompt_manual_renew_quota(query, context, parts[2], parts[3], None)
+        return
+
+    if action == "expiry" and len(parts) == 4:
         await _show_renew_duration_picker(query, parts[2], parts[3])
         return
 
     if action == "dur" and len(parts) == 5:
-        await _show_renew_quota_picker(query, parts[2], parts[3], int(parts[4]))
-        return
-
-    if action == "quota" and len(parts) == 6:
-        alias = parts[2]
-        key_id = parts[3]
-        days = int(parts[4])
-        quota_gb = float(parts[5])
-        client = get_vpn_client(alias)
-        if not client:
-            await query.edit_message_text(
-                f"❌ Could not connect to server `{alias}`.",
-                parse_mode='Markdown',
-            )
-            return
-        try:
-            if quota_gb == 0:
-                client.delete_data_limit(key_id)
-            else:
-                client.add_data_limit(key_id, _quota_bytes_from_gb(quota_gb))
-
-            now_utc = utc_now_iso()
-            new_expiry_utc = add_days_from_utc(now_utc, days)
-            queries.set_key_expiry(alias, key_id, new_expiry_utc)
-            queries.record_key_renewal(alias, key_id, quota_gb, renewed_at_utc=now_utc)
-            queries.add_key_lifecycle_event(
-                server_alias=alias,
-                key_id=key_id,
-                event_type="renew",
-                actor_user_id=update.effective_user.id if update.effective_user else None,
-                actor_username=update.effective_user.username if update.effective_user else None,
-                payload={
-                    "days": days,
-                    "quota_gb": quota_gb,
-                    "expiry_at_utc": new_expiry_utc,
-                    "renewed_at_utc": now_utc,
-                    "source": "button_flow",
-                },
-                created_at_utc=now_utc,
-            )
-            quota_text = "Unlimited" if quota_gb == 0 else f"{quota_gb:.2f} GB"
-            await _render_key_management_panel(
-                query,
-                alias,
-                key_id,
-                notice=(
-                    "✅ *Renew Completed*\n"
-                    f"New Quota: *{quota_text}*\n"
-                    f"New Expiry (Yangon): *{to_yangon_display(new_expiry_utc)}*\n"
-                    f"Policy: *+{days} days from renewal time*"
-                ),
-            )
-        except Exception as e:
-            logger.error(f"Button renew error: {e}")
-            await query.edit_message_text(
-                f"❌ Renew failed for key `{key_id}` on `{alias}`.",
-                parse_mode='Markdown',
-            )
+        await _prompt_manual_renew_quota(query, context, parts[2], parts[3], int(parts[4]))
         return
 
     await query.answer("Unknown renew action.", show_alert=True)
+
+
+@admin_only
+async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Final text input step for renew flow: receives manual quota with optional expiry extension."""
+    pending = context.user_data.get(PENDING_RENEW_KEY)
+    if not pending or not update.message:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    actor_user_id = pending.get("actor_user_id")
+    if actor_user_id and user.id != actor_user_id:
+        return
+
+    text = (update.message.text or "").strip().lower()
+    alias = pending.get("alias")
+    key_id = pending.get("key_id")
+    days = pending.get("days")
+    actor_username = pending.get("actor_username")
+
+    if text == "cancel":
+        context.user_data.pop(PENDING_RENEW_KEY, None)
+        await update.message.reply_text(
+            f"✅ Renew cancelled for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    if text in {"unlimited", "limitless", "nolimit", "no limit"}:
+        quota_gb = 0.0
+    else:
+        try:
+            quota_gb = float(text)
+            if quota_gb < 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Invalid quota. Enter a non-negative number in GB, `0`, `unlimited`, or `cancel`.",
+                parse_mode='Markdown'
+            )
+            return
+
+    client = get_vpn_client(alias)
+    if not client:
+        context.user_data.pop(PENDING_RENEW_KEY, None)
+        await update.message.reply_text(
+            f"❌ Could not connect to server `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
+    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+    current_expiry_utc = lifecycle.get("expiry_at_utc")
+    current_auto_disabled_at_utc = lifecycle.get("auto_disabled_at_utc")
+
+    try:
+        if quota_gb == 0:
+            client.delete_data_limit(key_id)
+        else:
+            client.add_data_limit(key_id, _quota_bytes_from_gb(quota_gb))
+
+        now_utc = utc_now_iso()
+        new_expiry_utc = current_expiry_utc
+        if days is not None:
+            new_expiry_utc = add_days_from_utc(now_utc, int(days))
+            queries.set_key_expiry(alias, key_id, new_expiry_utc)
+
+        queries.record_key_renewal(alias, key_id, quota_gb, renewed_at_utc=now_utc)
+
+        if days is None:
+            expiry_dt = parse_utc_iso(current_expiry_utc)
+            now_dt = parse_utc_iso(now_utc)
+            if expiry_dt and now_dt and expiry_dt <= now_dt:
+                queries.mark_key_expired(alias, key_id, current_auto_disabled_at_utc)
+            else:
+                queries.clear_key_expired(alias, key_id)
+
+        queries.add_key_lifecycle_event(
+            server_alias=alias,
+            key_id=key_id,
+            event_type="renew",
+            actor_user_id=user.id,
+            actor_username=actor_username or user.username,
+            payload={
+                "days": days,
+                "quota_gb": quota_gb,
+                "expiry_at_utc": new_expiry_utc,
+                "renewed_at_utc": now_utc,
+                "source": "manual_quota_flow",
+            },
+            created_at_utc=now_utc,
+        )
+
+        quota_text = "Unlimited" if quota_gb == 0 else f"{quota_gb:.2f} GB"
+        expiry_text = "Unchanged" if days is None else to_yangon_display(new_expiry_utc)
+        policy_text = "Quota only" if days is None else f"Quota + expiry (+{int(days)} days from now)"
+        await update.message.reply_text(
+            (
+                "✅ *Renew Completed*\n\n"
+                f"Server: `{alias}`\n"
+                f"Key ID: `{key_id}`\n"
+                f"New Quota: *{quota_text}*\n"
+                f"Expiry: *{expiry_text}*\n"
+                f"Mode: *{policy_text}*"
+            ),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Manual renew error: {e}")
+        await update.message.reply_text(
+            f"❌ Renew failed for key `{key_id}` on `{alias}`.",
+            parse_mode='Markdown'
+        )
+    finally:
+        context.user_data.pop(PENDING_RENEW_KEY, None)
 
 
 async def handle_manual_assign_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
