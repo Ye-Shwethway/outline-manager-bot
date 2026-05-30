@@ -1,18 +1,32 @@
 start - Start the bot
-help - Show full usage guide
+help - Show the command guide
 id - Show your Telegram user id
-keys - Key management menu
-newkey - Create a new key with wizard
-manage - Manage one key by alias and key_id
-cancel - Cancel active wizard
-addadmin - Owner: add an admin user
-removeadmin - Owner: remove an admin user
-listadmin - Owner: list all admins
-addserver - Owner: add an Outline server
-listserver - Owner: list configured server aliases
-deleteserver - Owner: delete a server
-setkeylimit - Owner: set server key limit
-noti - Admin/Owner: toggle your used-up alerts
-scan - Admin/Owner: run immediate used-up scan
-backup - Admin/Owner: generate manual backup file
-autobackup - Admin/Owner: get latest auto backup file
+register - Submit access request
+mykeys - Show your assigned keys
+keys - Open key management
+search - Search users or keys
+newkey - Create a new key
+manage - Manage users or a key
+renew - Renew a key quota or expiry
+cancel - Cancel the active wizard
+noti - Toggle your alerts
+scan - Run used-up key scan
+backup - Generate manual backup
+autobackup - Get latest auto backup
+users - Open user registry
+approve - Approve a user
+reject - Reject a user
+removeuser - Remove or unban a user
+addadmin - Owner add admin
+removeadmin - Owner remove admin
+listadmin - Owner list admins
+addserver - Owner add server
+listserver - Owner list servers
+deleteserver - Owner delete server
+keyusage - Owner key usage diagnostic
+keyaccounting - Owner key accounting diagnostic
+useraccounting - Owner user accounting diagnostic
+loyalty - Owner loyalty leaderboard
+setkeylimit - Owner set server key limit
+restart - Owner restart the bot
+reviewnoti - Owner toggle review alerts
