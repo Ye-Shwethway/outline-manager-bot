@@ -9,9 +9,11 @@ from src.utils.decorators import owner_only, admin_only
 from src.database import queries
 from src.services.backup_service import generate_backup_file, get_latest_backup_file
 from src.services.notifier import monitor_used_up_keys
+from src.services.outline_api import get_vpn_client
 
 logger = logging.getLogger(__name__)
 REVIEW_MODE_BROADCAST_COOLDOWN_SECONDS = 120
+BYTES_PER_GB = 1_000_000_000
 
 
 def _format_username_markdown(username: str | None, default: str = "(username unavailable)") -> str:
@@ -329,3 +331,79 @@ async def restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown',
         )
     asyncio.create_task(_restart_process_after_ack())
+
+
+@owner_only
+async def key_usage_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /keyusage <server_alias> <key_id> - inspect raw vs tracked usage for a key."""
+    if not update.message:
+        return
+
+    if len(context.args) != 2:
+        await update.message.reply_text(
+            "Usage: `/keyusage <server_alias> <key_id>`",
+            parse_mode='Markdown',
+        )
+        return
+
+    alias, key_id = context.args
+    client = get_vpn_client(alias)
+    if not client:
+        await update.message.reply_text(
+            f"❌ Could not connect to server `{alias}`.",
+            parse_mode='Markdown',
+        )
+        return
+
+    try:
+        keys = client.get_keys()
+    except Exception as e:
+        logger.error(f"Key usage diagnostic fetch error on {alias}: {e}")
+        await update.message.reply_text("❌ Failed to fetch keys from Outline server.")
+        return
+
+    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+    if not target_key:
+        await update.message.reply_text(
+            f"❌ Key `{key_id}` was not found on `{alias}`.",
+            parse_mode='Markdown',
+        )
+        return
+
+    raw_used_bytes = max(int(target_key.used_bytes or 0), 0)
+    effective_used_bytes = queries.observe_key_usage(alias, str(key_id), raw_used_bytes)
+    lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+
+    limit_bytes = int(target_key.data_limit or 0)
+    raw_remaining_bytes = max(limit_bytes - raw_used_bytes, 0) if limit_bytes else 0
+    effective_remaining_bytes = max(limit_bytes - effective_used_bytes, 0) if limit_bytes else 0
+    key_name = escape_markdown(str(target_key.name or 'Unnamed'), version=1)
+
+    if limit_bytes:
+        limit_line = f"{limit_bytes / BYTES_PER_GB:.2f} GB"
+        raw_remaining_line = f"{raw_remaining_bytes / BYTES_PER_GB:.2f} GB"
+        effective_remaining_line = f"{effective_remaining_bytes / BYTES_PER_GB:.2f} GB"
+    else:
+        limit_line = "Unlimited"
+        raw_remaining_line = "Unlimited"
+        effective_remaining_line = "Unlimited"
+
+    text = (
+        "🧪 *Key Usage Diagnostic*\n\n"
+        f"Server: `{alias}`\n"
+        f"Key ID: `{key_id}`\n"
+        f"Name: *{key_name}*\n"
+        f"Data Limit: *{limit_line}*\n\n"
+        "*Live Outline Counter*\n"
+        f"Raw Used: *{raw_used_bytes / BYTES_PER_GB:.2f} GB*\n"
+        f"Raw Remaining: *{raw_remaining_line}*\n\n"
+        "*Bot Effective Counter*\n"
+        f"Effective Used: *{effective_used_bytes / BYTES_PER_GB:.2f} GB*\n"
+        f"Effective Remaining: *{effective_remaining_line}*\n\n"
+        "*Tracking State*\n"
+        f"Last Observed Raw: *{int(lifecycle.get('last_observed_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
+        f"Reset Offset: *{int(lifecycle.get('usage_reset_offset_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
+        f"Max Effective Used: *{int(lifecycle.get('max_effective_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
+        f"Last Usage Sync UTC: *{escape_markdown(str(lifecycle.get('last_usage_sync_at_utc') or 'N/A'), version=1)}*"
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')

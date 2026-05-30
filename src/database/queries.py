@@ -343,7 +343,9 @@ def get_key_lifecycle(server_alias: str, key_id: str) -> dict | None:
         cursor = conn.execute(
             '''
             SELECT expiry_at_utc, is_expired, auto_disabled_at_utc, assigned_user_id,
-                   renew_count, last_renewed_at_utc, last_renewed_quota_gb, created_at_utc
+                   renew_count, last_renewed_at_utc, last_renewed_quota_gb,
+                   last_observed_used_bytes, usage_reset_offset_bytes, max_effective_used_bytes,
+                   last_usage_sync_at_utc, created_at_utc
             FROM key_metadata
             WHERE server_alias = ? AND key_id = ?
             ''',

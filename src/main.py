@@ -21,6 +21,7 @@ OWNER_ONLY_COMMANDS = {
     "addserver",
     "listserver",
     "deleteserver",
+    "keyusage",
     "setkeylimit",
     "restart",
     "reviewnoti",
@@ -45,7 +46,7 @@ ADMIN_OWNER_COMMANDS = {
 PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
     "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
@@ -74,6 +75,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/addserver <alias> <api_url> <cert_sha256>` Add Outline server (owner only)\n"
     "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
+    "- `/keyusage <server_alias> <key_id>` Show raw Outline usage vs tracked effective usage for one key (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
     "- `/restart` Restart bot process (owner only, data preserved)\n"
@@ -90,6 +92,7 @@ PRIVILEGED_HELP_TEXT = (
     "*Examples*\n"
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
+    "- `/keyusage vps1 7`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
     "- `/restart`\n"
@@ -240,6 +243,7 @@ def main():
     app.add_handler(CommandHandler("addserver", owner.add_server))
     app.add_handler(CommandHandler("listserver", owner.list_server))
     app.add_handler(CommandHandler("deleteserver", owner.delete_server))
+    app.add_handler(CommandHandler("keyusage", owner.key_usage_diagnostic))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     app.add_handler(CommandHandler("noti", owner.set_notifications))
     app.add_handler(CommandHandler("restart", owner.restart_bot))
