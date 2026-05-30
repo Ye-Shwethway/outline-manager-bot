@@ -286,6 +286,30 @@ def list_customer_accounting_totals() -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
+def get_customer_accounting_leaderboard(metric: str, limit: int = 10) -> list[dict]:
+    metric_sql_map = {
+        'bought': 'total_purchased_bytes DESC, unlimited_grant_count DESC, user_id ASC',
+        'used': 'total_consumed_bytes DESC, user_id ASC',
+        'renewals': 'renewal_event_count DESC, total_renewed_bytes DESC, user_id ASC',
+    }
+    order_sql = metric_sql_map.get(metric, metric_sql_map['bought'])
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f'''
+            SELECT user_id, total_purchased_bytes, total_consumed_bytes, total_renewed_bytes,
+                   purchase_event_count, renewal_event_count, unlimited_grant_count,
+                   last_grant_bytes, last_grant_unlimited, first_recorded_at_utc,
+                   last_grant_at_utc, last_consumed_at_utc, updated_at_utc
+            FROM customer_accounting_totals
+            ORDER BY {order_sql}
+            LIMIT ?
+            ''',
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_service_accounting_events(
     server_alias: str | None = None,
     key_id: str | None = None,

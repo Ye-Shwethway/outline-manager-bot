@@ -137,6 +137,22 @@ def _user_accounting_result_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _loyalty_metric_keyboard(selected_metric: str | None = None) -> InlineKeyboardMarkup:
+    labels = [
+        ("buyers", "💰 Top Buyers"),
+        ("used", "📈 Top Consumers"),
+        ("renewals", "🔁 Top Renewers"),
+    ]
+    row = []
+    for metric, label in labels:
+        display = f"• {label}" if metric == selected_metric else label
+        row.append(InlineKeyboardButton(display, callback_data=f"loyal|metric|{metric}"))
+    return InlineKeyboardMarkup([
+        row,
+        [InlineKeyboardButton("❎ Close", callback_data="loyal|close")],
+    ])
+
+
 def _format_accounting_bytes(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
     bytes_value = max(int(total_bytes or 0), 0)
     unlimited_value = max(int(unlimited_count or 0), 0)
@@ -262,6 +278,58 @@ def _format_customer_accounting_text(user_id: int) -> str:
             lines.append(
                 f"- *{event_type}* | Key: `{event.get('server_alias')}` / `{event.get('key_id')}` | Bought: *{purchased_text}* | Used: *{consumed_text}* | {created}"
             )
+    return "\n".join(lines)
+
+
+def _resolve_subject_profile(user_id: int) -> tuple[str, str]:
+    customer = queries.get_customer(user_id)
+    username = customer.get("username") if customer else None
+    admin_map = {int(item["user_id"]): item for item in queries.get_admin_profiles()}
+    if not username:
+        username = admin_map.get(user_id, {}).get("username")
+    role = "OWNER" if user_id == OWNER_ID else "ADMIN" if user_id in queries.get_admins() else "USER"
+    return role, _format_username_markdown(username, default="(no username)")
+
+
+def _build_loyalty_text(metric: str) -> str:
+    metric_title = {
+        'buyers': '💰 *Top Buyers*',
+        'used': '📈 *Top Consumers*',
+        'renewals': '🔁 *Top Renewers*',
+    }.get(metric, '💰 *Top Buyers*')
+    query_metric = 'bought' if metric == 'buyers' else metric
+    rows = queries.get_customer_accounting_leaderboard(query_metric, limit=10)
+
+    lines = [
+        "🏅 *Customer Loyalty Leaderboard*",
+        "",
+        metric_title,
+    ]
+
+    if not rows:
+        lines.append("- No customer accounting totals recorded yet.")
+        lines.append("")
+        lines.append("Choose another leaderboard below.")
+        return "\n".join(lines)
+
+    for index, item in enumerate(rows, start=1):
+        user_id = int(item['user_id'])
+        role, username_line = _resolve_subject_profile(user_id)
+        bought_line = escape_markdown(
+            _format_accounting_bytes(item.get('total_purchased_bytes'), item.get('unlimited_grant_count')),
+            version=1,
+        )
+        used_line = escape_markdown(_format_accounting_bytes(item.get('total_consumed_bytes')), version=1)
+        renewed_line = escape_markdown(_format_accounting_bytes(item.get('total_renewed_bytes')), version=1)
+        renewal_count = int(item.get('renewal_event_count') or 0)
+
+        lines.append(
+            f"{index}. `{user_id}` | *{role}* | {username_line}\n"
+            f"   Bought: *{bought_line}* | Used: *{used_line}* | Renewed: *{renewed_line}* | Renewals: *{renewal_count}*"
+        )
+
+    lines.append("")
+    lines.append("Choose another leaderboard below.")
     return "\n".join(lines)
 
 
@@ -735,6 +803,24 @@ async def user_accounting_diagnostic(update: Update, context: ContextTypes.DEFAU
 
 
 @owner_only
+async def loyalty_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    metric = 'buyers'
+    if len(context.args) == 1:
+        arg = context.args[0].strip().lower()
+        if arg in {'buyers', 'used', 'renewals'}:
+            metric = arg
+
+    await update.message.reply_text(
+        _build_loyalty_text(metric),
+        parse_mode='Markdown',
+        reply_markup=_loyalty_metric_keyboard(metric),
+    )
+
+
+@owner_only
 async def handle_key_usage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query or not query.data:
@@ -973,3 +1059,36 @@ async def handle_user_accounting_callback(update: Update, context: ContextTypes.
         return
 
     await query.answer("Unknown user accounting action.", show_alert=True)
+
+
+@owner_only
+async def handle_loyalty_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    await query.answer()
+    parts = query.data.split("|")
+    if len(parts) < 2 or parts[0] != "loyal":
+        return
+
+    action = parts[1]
+    if action == "close":
+        await query.edit_message_text("✅ Loyalty leaderboard panel closed.")
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return
+
+    if action == "metric" and len(parts) == 3:
+        metric = parts[2]
+        if metric not in {'buyers', 'used', 'renewals'}:
+            await query.answer("Unknown leaderboard metric.", show_alert=True)
+            return
+        await query.edit_message_text(
+            _build_loyalty_text(metric),
+            parse_mode='Markdown',
+            reply_markup=_loyalty_metric_keyboard(metric),
+        )
+        return
+
+    await query.answer("Unknown loyalty action.", show_alert=True)

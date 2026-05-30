@@ -24,6 +24,7 @@ OWNER_ONLY_COMMANDS = {
     "keyusage",
     "keyaccounting",
     "useraccounting",
+    "loyalty",
     "setkeylimit",
     "restart",
     "reviewnoti",
@@ -49,7 +50,7 @@ ADMIN_OWNER_COMMANDS = {
 PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/keyaccounting`, `/useraccounting`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/keyaccounting`, `/useraccounting`, `/loyalty`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
     "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/renew`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
@@ -82,6 +83,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/keyusage` Open inline server/key picker for raw Outline usage vs tracked effective usage (owner only)\n"
     "- `/keyaccounting` Open inline server/key picker for lifetime accounting totals and recent accounting events (owner only)\n"
     "- `/useraccounting` Open inline user picker for customer lifetime accounting totals and recent events (owner only)\n"
+    "- `/loyalty` Open inline customer loyalty leaderboard (top buyers, consumers, renewers) (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
     "- `/restart` Restart bot process (owner only, data preserved)\n"
@@ -101,6 +103,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/keyusage`\n"
     "- `/keyaccounting`\n"
     "- `/useraccounting`\n"
+    "- `/loyalty`\n"
     "- `/keyusage vps1 7`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
@@ -266,6 +269,7 @@ def main():
     app.add_handler(CommandHandler("keyusage", owner.key_usage_diagnostic))
     app.add_handler(CommandHandler("keyaccounting", owner.key_accounting_diagnostic))
     app.add_handler(CommandHandler("useraccounting", owner.user_accounting_diagnostic))
+    app.add_handler(CommandHandler("loyalty", owner.loyalty_leaderboard))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     app.add_handler(CommandHandler("noti", owner.set_notifications))
     app.add_handler(CommandHandler("restart", owner.restart_bot))
@@ -296,6 +300,7 @@ def main():
     app.add_handler(CallbackQueryHandler(owner.handle_key_usage_callback, pattern=r"^kdiag\|"))
     app.add_handler(CallbackQueryHandler(owner.handle_key_accounting_callback, pattern=r"^kacct\|"))
     app.add_handler(CallbackQueryHandler(owner.handle_user_accounting_callback, pattern=r"^uacct\|"))
+    app.add_handler(CallbackQueryHandler(owner.handle_loyalty_callback, pattern=r"^loyal\|"))
     app.add_handler(CallbackQueryHandler(lists.handle_renew_workflow_callback, pattern=r"^rflow\|"))
     
     # 7. Register Wizards
