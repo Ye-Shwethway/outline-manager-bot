@@ -282,6 +282,178 @@ def get_service_accounting_events(
         )
         return [dict(row) for row in cursor.fetchall()]
 
+
+def _get_accounting_backfill_version(conn) -> str | None:
+    cursor = conn.execute('SELECT backfill_version FROM accounting_backfill_state WHERE id = 1')
+    row = cursor.fetchone()
+    return row['backfill_version'] if row else None
+
+
+def _set_accounting_backfill_version(conn, version: str):
+    conn.execute(
+        '''
+        INSERT INTO accounting_backfill_state (id, backfill_version, completed_at_utc)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            backfill_version = excluded.backfill_version,
+            completed_at_utc = excluded.completed_at_utc
+        ''',
+        (version, _utc_now_iso()),
+    )
+
+
+def _key_has_accounting_events(conn, server_alias: str, key_id: str) -> bool:
+    cursor = conn.execute(
+        '''
+        SELECT 1
+        FROM service_accounting_events
+        WHERE server_alias = ? AND key_id = ?
+        LIMIT 1
+        ''',
+        (server_alias, key_id),
+    )
+    return cursor.fetchone() is not None
+
+
+def _backfill_key_accounting_from_history(conn, key_row: sqlite3.Row) -> bool:
+    server_alias = key_row['server_alias']
+    key_id = str(key_row['key_id'])
+    if _key_has_accounting_events(conn, server_alias, key_id):
+        return False
+
+    _ensure_key_accounting_row(conn, server_alias, key_id)
+
+    current_assigned_user_id = int(key_row['assigned_user_id']) if key_row['assigned_user_id'] else None
+    conn.execute(
+        '''
+        UPDATE key_accounting_totals
+        SET current_assigned_user_id = ?, updated_at_utc = ?
+        WHERE server_alias = ? AND key_id = ?
+        ''',
+        (current_assigned_user_id, _utc_now_iso(), server_alias, key_id),
+    )
+
+    cursor = conn.execute(
+        '''
+        SELECT event_type, event_payload_json, created_at_utc, id
+        FROM key_lifecycle_events
+        WHERE server_alias = ? AND key_id = ?
+        ORDER BY COALESCE(created_at_utc, ''), id
+        ''',
+        (server_alias, key_id),
+    )
+    lifecycle_events = cursor.fetchall()
+
+    assigned_user_id = None
+    saw_grant_event = False
+    saw_usage_event = False
+
+    for row in lifecycle_events:
+        event_type = row['event_type']
+        payload_raw = row['event_payload_json'] or '{}'
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            payload = {}
+        created_at_utc = row['created_at_utc'] or _utc_now_iso()
+
+        if event_type == 'assigned_user':
+            candidate = payload.get('assigned_user_id')
+            assigned_user_id = int(candidate) if candidate is not None else None
+            continue
+        if event_type == 'unassigned_user':
+            assigned_user_id = None
+            continue
+        if event_type != 'renew':
+            continue
+
+        try:
+            quota_gb_value = float(payload.get('quota_gb') or 0)
+        except (TypeError, ValueError):
+            quota_gb_value = 0.0
+
+        _record_accounting_event(
+            conn,
+            server_alias,
+            key_id,
+            event_type='renewal_grant',
+            customer_user_id=assigned_user_id,
+            purchased_bytes=int(quota_gb_value * 1_000_000_000) if quota_gb_value > 0 else 0,
+            consumed_bytes=0,
+            is_unlimited=quota_gb_value == 0,
+            metadata={
+                'source': 'historical_lifecycle_backfill',
+                'days': payload.get('days'),
+                'expiry_at_utc': payload.get('expiry_at_utc'),
+            },
+            created_at_utc=created_at_utc,
+        )
+        saw_grant_event = True
+
+    if not saw_grant_event and key_row['last_renewed_quota_gb'] is not None:
+        try:
+            last_quota_gb = float(key_row['last_renewed_quota_gb'] or 0)
+        except (TypeError, ValueError):
+            last_quota_gb = 0.0
+
+        _record_accounting_event(
+            conn,
+            server_alias,
+            key_id,
+            event_type='renewal_grant',
+            customer_user_id=current_assigned_user_id,
+            purchased_bytes=int(last_quota_gb * 1_000_000_000) if last_quota_gb > 0 else 0,
+            consumed_bytes=0,
+            is_unlimited=last_quota_gb == 0,
+            metadata={'source': 'renew_snapshot_backfill'},
+            created_at_utc=key_row['last_renewed_at_utc'] or key_row['created_at_utc'] or _utc_now_iso(),
+        )
+        saw_grant_event = True
+
+    max_effective_used_bytes = max(int(key_row['max_effective_used_bytes'] or 0), 0)
+    if max_effective_used_bytes > 0:
+        _record_accounting_event(
+            conn,
+            server_alias,
+            key_id,
+            event_type='usage_delta',
+            customer_user_id=current_assigned_user_id,
+            purchased_bytes=0,
+            consumed_bytes=max_effective_used_bytes,
+            is_unlimited=False,
+            metadata={'source': 'current_usage_snapshot_backfill'},
+            created_at_utc=key_row['last_usage_sync_at_utc'] or key_row['created_at_utc'] or _utc_now_iso(),
+        )
+        saw_usage_event = True
+
+    return saw_grant_event or saw_usage_event
+
+
+def run_accounting_backfill(version: str = 'v1') -> dict:
+    with get_connection() as conn:
+        current_version = _get_accounting_backfill_version(conn)
+        if current_version == version:
+            return {'ran': False, 'version': version, 'backfilled_keys': 0}
+
+        cursor = conn.execute(
+            '''
+            SELECT server_alias, key_id, assigned_user_id, last_renewed_at_utc,
+                   last_renewed_quota_gb, max_effective_used_bytes,
+                   last_usage_sync_at_utc, created_at_utc
+            FROM key_metadata
+            ORDER BY server_alias, key_id
+            '''
+        )
+        rows = cursor.fetchall()
+
+        backfilled_keys = 0
+        for row in rows:
+            if _backfill_key_accounting_from_history(conn, row):
+                backfilled_keys += 1
+
+        _set_accounting_backfill_version(conn, version)
+        return {'ran': True, 'version': version, 'backfilled_keys': backfilled_keys}
+
 # --- Admin Operations ---
 def add_admin(user_id: int, username: str | None = None) -> bool:
     try:

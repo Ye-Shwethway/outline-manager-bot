@@ -22,6 +22,7 @@ OWNER_ONLY_COMMANDS = {
     "listserver",
     "deleteserver",
     "keyusage",
+    "keyaccounting",
     "setkeylimit",
     "restart",
     "reviewnoti",
@@ -47,7 +48,7 @@ ADMIN_OWNER_COMMANDS = {
 PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
+    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/keyaccounting`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
     "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/renew`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
@@ -78,6 +79,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
     "- `/keyusage` Open inline server/key picker for raw Outline usage vs tracked effective usage (owner only)\n"
+    "- `/keyaccounting` Open inline server/key picker for lifetime accounting totals and recent accounting events (owner only)\n"
     "- `/setkeylimit <alias> <max_keys>` Set server key limit (owner only)\n"
     "- `/noti <on|off>` Toggle your own used-up key alerts (admin/owner)\n"
     "- `/restart` Restart bot process (owner only, data preserved)\n"
@@ -95,6 +97,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/addadmin 123456789`\n"
     "- `/addserver vps1 https://1.2.3.4:12345/abcd E1F2A3...`\n"
     "- `/keyusage`\n"
+    "- `/keyaccounting`\n"
     "- `/keyusage vps1 7`\n"
     "- `/setkeylimit vps1 50`\n"
     "- `/noti on`\n"
@@ -223,6 +226,16 @@ async def global_error_handler(update: object, context):
 def main():
     # 1. Initialize Database
     init_db()
+    try:
+        backfill_result = queries.run_accounting_backfill()
+        if backfill_result.get("ran"):
+            logger.info(
+                "Accounting backfill %s completed. Keys backfilled: %s",
+                backfill_result.get("version"),
+                backfill_result.get("backfilled_keys"),
+            )
+    except Exception as e:
+        logger.error(f"Accounting backfill failed during startup: {e}")
     
     # 2. Build the Application
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
@@ -248,6 +261,7 @@ def main():
     app.add_handler(CommandHandler("listserver", owner.list_server))
     app.add_handler(CommandHandler("deleteserver", owner.delete_server))
     app.add_handler(CommandHandler("keyusage", owner.key_usage_diagnostic))
+    app.add_handler(CommandHandler("keyaccounting", owner.key_accounting_diagnostic))
     app.add_handler(CommandHandler("setkeylimit", owner.set_key_limit))
     app.add_handler(CommandHandler("noti", owner.set_notifications))
     app.add_handler(CommandHandler("restart", owner.restart_bot))
@@ -276,6 +290,7 @@ def main():
     app.add_handler(CallbackQueryHandler(customers.handle_registration_review_callback, pattern="^ureg_(a|r)_"))
     app.add_handler(CallbackQueryHandler(customers.handle_users_admin_callback, pattern="^uadm_"))
     app.add_handler(CallbackQueryHandler(owner.handle_key_usage_callback, pattern=r"^kdiag\|"))
+    app.add_handler(CallbackQueryHandler(owner.handle_key_accounting_callback, pattern=r"^kacct\|"))
     app.add_handler(CallbackQueryHandler(lists.handle_renew_workflow_callback, pattern=r"^rflow\|"))
     
     # 7. Register Wizards

@@ -70,6 +70,111 @@ def _keyusage_result_keyboard(alias: str) -> InlineKeyboardMarkup:
     )
 
 
+def _key_accounting_servers_keyboard(servers: dict) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(f"🌐 {alias}", callback_data=f"kacct|srv|{alias}")]
+        for alias in sorted(servers.keys())
+    ]
+    rows.append([InlineKeyboardButton("❎ Close", callback_data="kacct|close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _key_accounting_keys_keyboard(alias: str, keys: list) -> InlineKeyboardMarkup:
+    rows = []
+    for key in keys[:30]:
+        key_name = str(key.name or "Unnamed")[:18]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"🔑 {key.key_id} | {key_name}",
+                    callback_data=f"kacct|key|{alias}|{key.key_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back Servers", callback_data="kacct|servers"),
+            InlineKeyboardButton("❎ Close", callback_data="kacct|close"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _key_accounting_result_keyboard(alias: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("⬅️ Back Keys", callback_data=f"kacct|srv|{alias}")],
+            [InlineKeyboardButton("🌐 Back Servers", callback_data="kacct|servers")],
+            [InlineKeyboardButton("❎ Close", callback_data="kacct|close")],
+        ]
+    )
+
+
+def _format_accounting_bytes(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
+    bytes_value = max(int(total_bytes or 0), 0)
+    unlimited_value = max(int(unlimited_count or 0), 0)
+    if bytes_value <= 0 and unlimited_value <= 0:
+        return "0.00 GB"
+    if unlimited_value <= 0:
+        return f"{bytes_value / BYTES_PER_GB:.2f} GB"
+    if bytes_value <= 0:
+        return f"Unlimited x{unlimited_value}"
+    return f"{bytes_value / BYTES_PER_GB:.2f} GB + Unlimited x{unlimited_value}"
+
+
+async def _build_key_accounting_text(alias: str, key_id: str) -> str | None:
+    client = get_vpn_client(alias)
+    if not client:
+        return None
+
+    keys = client.get_keys()
+    target_key = next((key for key in keys if str(key.key_id) == str(key_id)), None)
+    if not target_key:
+        return None
+
+    totals = queries.get_key_accounting_totals(alias, str(key_id)) or {}
+    events = queries.get_service_accounting_events(server_alias=alias, key_id=str(key_id), limit=8)
+    key_name = escape_markdown(str(target_key.name or 'Unnamed'), version=1)
+    owner_user_id = totals.get('current_assigned_user_id')
+    owner_line = f"`{owner_user_id}`" if owner_user_id else "*Unassigned*"
+
+    lines = [
+        "📊 *Key Accounting Diagnostic*",
+        "",
+        f"Server: `{alias}`",
+        f"Key ID: `{key_id}`",
+        f"Name: *{key_name}*",
+        f"Current Owner: {owner_line}",
+        f"Lifetime Bought: *{escape_markdown(_format_accounting_bytes(totals.get('total_purchased_bytes'), totals.get('unlimited_grant_count')), version=1)}*",
+        f"Lifetime Used: *{escape_markdown(_format_accounting_bytes(totals.get('total_consumed_bytes')), version=1)}*",
+        f"Purchase Events: *{int(totals.get('purchase_event_count') or 0)}*",
+        f"Renewal Events: *{int(totals.get('renewal_event_count') or 0)}*",
+        f"Last Grant UTC: *{escape_markdown(to_utc_display(totals.get('last_grant_at_utc')), version=1)}*",
+        f"Last Usage UTC: *{escape_markdown(to_utc_display(totals.get('last_consumed_at_utc')), version=1)}*",
+        "",
+        "*Recent Accounting Events*",
+    ]
+
+    if not events:
+        lines.append("- none")
+    else:
+        for event in events:
+            purchased_text = escape_markdown(
+                _format_accounting_bytes(event.get('purchased_bytes'), 1 if event.get('is_unlimited') else 0),
+                version=1,
+            )
+            consumed_text = escape_markdown(_format_accounting_bytes(event.get('consumed_bytes')), version=1)
+            event_type = escape_markdown(str(event.get('event_type') or 'unknown'), version=1)
+            created = escape_markdown(to_utc_display(event.get('created_at_utc')), version=1)
+            customer_user_id = event.get('customer_user_id')
+            customer_line = f" | User: `{customer_user_id}`" if customer_user_id else ""
+            lines.append(
+                f"- *{event_type}* | Bought: *{purchased_text}* | Used: *{consumed_text}*{customer_line} | {created}"
+            )
+
+    return "\n".join(lines)
+
+
 async def _build_keyusage_diagnostic_text(alias: str, key_id: str) -> str | None:
     client = get_vpn_client(alias)
     if not client:
@@ -469,6 +574,48 @@ async def key_usage_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 @owner_only
+async def key_accounting_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    if len(context.args) == 0:
+        servers = queries.get_servers()
+        if not servers:
+            await update.message.reply_text("No servers configured yet.")
+            return
+        await update.message.reply_text(
+            "📊 *Key Accounting Diagnostic*\n\nSelect a server to inspect lifetime accounting.",
+            parse_mode='Markdown',
+            reply_markup=_key_accounting_servers_keyboard(servers),
+        )
+        return
+
+    if len(context.args) != 2:
+        await update.message.reply_text(
+            "Usage: `/keyaccounting` or `/keyaccounting <server_alias> <key_id>`",
+            parse_mode='Markdown',
+        )
+        return
+
+    alias, key_id = context.args
+    try:
+        text = await _build_key_accounting_text(alias, key_id)
+    except Exception as e:
+        logger.error(f"Key accounting diagnostic fetch error on {alias}/{key_id}: {e}")
+        await update.message.reply_text("❌ Failed to fetch key accounting details.")
+        return
+
+    if not text:
+        await update.message.reply_text(
+            f"❌ Key `{key_id}` was not found on `{alias}` or the server is unreachable.",
+            parse_mode='Markdown',
+        )
+        return
+
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+
+@owner_only
 async def handle_key_usage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query or not query.data:
@@ -567,3 +714,101 @@ async def handle_key_usage_callback(update: Update, context: ContextTypes.DEFAUL
         return
 
     await query.answer("Unknown diagnostic action.", show_alert=True)
+
+
+@owner_only
+async def handle_key_accounting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    await query.answer()
+    parts = query.data.split("|")
+    if len(parts) < 2 or parts[0] != "kacct":
+        return
+
+    action = parts[1]
+    if action == "close":
+        await query.edit_message_text("✅ Key accounting diagnostic panel closed.")
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return
+
+    if action == "servers":
+        servers = queries.get_servers()
+        if not servers:
+            await query.edit_message_text("No servers configured yet.")
+            return
+        await query.edit_message_text(
+            "📊 *Key Accounting Diagnostic*\n\nSelect a server to inspect lifetime accounting.",
+            parse_mode='Markdown',
+            reply_markup=_key_accounting_servers_keyboard(servers),
+        )
+        return
+
+    if action == "srv" and len(parts) == 3:
+        alias = parts[2]
+        client = get_vpn_client(alias)
+        if not client:
+            await query.edit_message_text(
+                f"❌ Could not connect to server `{alias}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Back Servers", callback_data="kacct|servers")],
+                    [InlineKeyboardButton("❎ Close", callback_data="kacct|close")],
+                ]),
+            )
+            return
+        try:
+            keys = client.get_keys()
+        except Exception as e:
+            logger.error(f"Key accounting diagnostic list error on {alias}: {e}")
+            await query.edit_message_text(
+                f"❌ Failed to fetch keys from `{alias}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Back Servers", callback_data="kacct|servers")],
+                    [InlineKeyboardButton("❎ Close", callback_data="kacct|close")],
+                ]),
+            )
+            return
+        if not keys:
+            await query.edit_message_text(
+                f"📊 *Key Accounting Diagnostic*\n\nNo keys found on `{alias}`.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Back Servers", callback_data="kacct|servers")],
+                    [InlineKeyboardButton("❎ Close", callback_data="kacct|close")],
+                ]),
+            )
+            return
+        await query.edit_message_text(
+            f"📊 *Key Accounting Diagnostic*\n\nSelect a key on `{alias}`.",
+            parse_mode='Markdown',
+            reply_markup=_key_accounting_keys_keyboard(alias, keys),
+        )
+        return
+
+    if action == "key" and len(parts) == 4:
+        alias = parts[2]
+        key_id = parts[3]
+        try:
+            text = await _build_key_accounting_text(alias, key_id)
+        except Exception as e:
+            logger.error(f"Key accounting diagnostic detail error on {alias}/{key_id}: {e}")
+            text = None
+        if not text:
+            await query.edit_message_text(
+                f"❌ Key `{key_id}` was not found on `{alias}` or the server is unreachable.",
+                parse_mode='Markdown',
+                reply_markup=_key_accounting_result_keyboard(alias),
+            )
+            return
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=_key_accounting_result_keyboard(alias),
+        )
+        return
+
+    await query.answer("Unknown accounting action.", show_alert=True)

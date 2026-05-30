@@ -15,6 +15,25 @@ USER_STATUSES = ["pending", "approved", "rejected", "staff"]
 BYTES_PER_GB = 1_000_000_000
 
 
+def _format_lifetime_total(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
+    bytes_value = max(int(total_bytes or 0), 0)
+    unlimited_value = max(int(unlimited_count or 0), 0)
+    if bytes_value <= 0 and unlimited_value <= 0:
+        return "0.00 GB"
+    if unlimited_value <= 0:
+        return f"{bytes_value / BYTES_PER_GB:.2f} GB"
+    if bytes_value <= 0:
+        return f"Unlimited x{unlimited_value}"
+    return f"{bytes_value / BYTES_PER_GB:.2f} GB + Unlimited x{unlimited_value}"
+
+
+def _customer_totals_lines(user_id: int) -> tuple[str, str]:
+    totals = queries.get_customer_accounting_totals(user_id) or {}
+    bought = _format_lifetime_total(totals.get("total_purchased_bytes"), totals.get("unlimited_grant_count"))
+    used = _format_lifetime_total(totals.get("total_consumed_bytes"))
+    return bought, used
+
+
 def _is_privileged_principal(principal_type: str) -> bool:
     return principal_type in {"owner", "admin"}
 
@@ -215,7 +234,13 @@ def _format_user_line(item: dict) -> str:
     uname = f"@{username}" if username else "(no username)"
     uname_safe = escape_markdown(uname, version=1)
     first_name_safe = escape_markdown(str(first_name), version=1)
-    return f"- {role_text} | ID: `{user_id}` | Username: {uname_safe} | Name: {first_name_safe}"
+    bought, used = _customer_totals_lines(int(user_id))
+    bought_safe = escape_markdown(bought, version=1)
+    used_safe = escape_markdown(used, version=1)
+    return (
+        f"- {role_text} | ID: `{user_id}` | Username: {uname_safe} | Name: {first_name_safe}\n"
+        f"  Lifetime Bought: *{bought_safe}* | Lifetime Used: *{used_safe}*"
+    )
 
 
 def _resolve_username_for_user(user_id: int) -> str | None:
@@ -540,13 +565,22 @@ def build_mykeys_snapshot_text(user_id: int) -> str:
             logger.error(f"mykeys snapshot fetch error on {alias}: {e}")
             server_key_map[alias] = {}
 
-    lines = ["🔑 *Your Assigned Keys*", ""]
+    total_bought, total_used = _customer_totals_lines(user_id)
+    lines = [
+        "🔑 *Your Assigned Keys*",
+        f"Lifetime Bought: *{escape_markdown(total_bought, version=1)}*",
+        f"Lifetime Used: *{escape_markdown(total_used, version=1)}*",
+        "",
+    ]
     for item in items:
         alias = item["server_alias"]
         key_id = str(item["key_id"])
         expiry = to_yangon_display(item.get("expiry_at_utc")) if item.get("expiry_at_utc") else "Not set"
         state = "Expired" if item.get("is_expired") else "Active"
         renew_count = item.get("renew_count") or 0
+        accounting = queries.get_key_accounting_totals(alias, key_id) or {}
+        lifetime_bought = _format_lifetime_total(accounting.get("total_purchased_bytes"), accounting.get("unlimited_grant_count"))
+        lifetime_used = _format_lifetime_total(accounting.get("total_consumed_bytes"))
 
         live_key = server_key_map.get(alias, {}).get(key_id)
         if live_key:
@@ -573,7 +607,9 @@ def build_mykeys_snapshot_text(user_id: int) -> str:
             f"  {remaining_line}\n"
             f"  {key_url_line}\n"
             f"  Expiry: *{expiry}* ({state})\n"
-            f"  Renew Count: *{renew_count}*"
+            f"  Renew Count: *{renew_count}*\n"
+            f"  Lifetime Bought: *{escape_markdown(lifetime_bought, version=1)}*\n"
+            f"  Lifetime Used: *{escape_markdown(lifetime_used, version=1)}*"
         )
 
     return "\n".join(lines)
@@ -752,8 +788,12 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_name_text = _format_text_markdown(first_name)
 
         assigned = assigned_by_user.get(user_id, [])
+        bought, used = _customer_totals_lines(user_id)
         lines.append(f"{role_label} | ID: `{user_id}` | Username: {username_text} | Name: {first_name_text}")
         lines.append(f"Assigned Keys: *{len(assigned)}*")
+        lines.append(
+            f"Lifetime Bought: *{escape_markdown(bought, version=1)}* | Lifetime Used: *{escape_markdown(used, version=1)}*"
+        )
 
         if assigned:
             for item in assigned[:15]:
@@ -879,6 +919,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         uname = _format_username_markdown(username)
         first_name = _format_text_markdown(first_name)
         assigned_count = len(queries.get_user_assigned_keys(target_id))
+        bought, used = _customer_totals_lines(target_id)
         can_manage = _can_manage_principal(actor.id, target_id, principal_type)
 
         text = (
@@ -888,7 +929,9 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
             f"Username: {uname}\n"
             f"Name: {first_name}\n"
             f"Status: *{customer_status.upper()}*\n"
-            f"Assigned Keys: *{assigned_count}*"
+            f"Assigned Keys: *{assigned_count}*\n"
+            f"Lifetime Bought: *{escape_markdown(bought, version=1)}*\n"
+            f"Lifetime Used: *{escape_markdown(used, version=1)}*"
         )
         await query.edit_message_text(
             text,
@@ -965,6 +1008,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         first_name = _format_text_markdown(customer.get("first_name"))
         customer_status = (customer.get("status") or "pending").lower()
         assigned_count = len(queries.get_user_assigned_keys(target_id))
+        bought, used = _customer_totals_lines(target_id)
         await query.edit_message_text(
             (
                 "👤 *Manage User*\n\n"
@@ -972,7 +1016,9 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
                 f"Username: {uname}\n"
                 f"Name: {first_name}\n"
                 f"Status: *{customer_status.upper()}*\n"
-                f"Assigned Keys: *{assigned_count}*"
+                f"Assigned Keys: *{assigned_count}*\n"
+                f"Lifetime Bought: *{escape_markdown(bought, version=1)}*\n"
+                f"Lifetime Used: *{escape_markdown(used, version=1)}*"
             ),
             parse_mode="Markdown",
             reply_markup=_user_manage_keyboard(
@@ -1045,6 +1091,7 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
         first_name = _format_text_markdown(customer.get("first_name"))
         customer_status = (customer.get("status") or "pending").lower()
         assigned_count = len(queries.get_user_assigned_keys(target_id))
+        bought, used = _customer_totals_lines(target_id)
         await query.edit_message_text(
             (
                 "👤 *Manage User*\n\n"
@@ -1052,7 +1099,9 @@ async def handle_users_admin_callback(update: Update, context: ContextTypes.DEFA
                 f"Username: {uname}\n"
                 f"Name: {first_name}\n"
                 f"Status: *{customer_status.upper()}*\n"
-                f"Assigned Keys: *{assigned_count}*"
+                f"Assigned Keys: *{assigned_count}*\n"
+                f"Lifetime Bought: *{escape_markdown(bought, version=1)}*\n"
+                f"Lifetime Used: *{escape_markdown(used, version=1)}*"
             ),
             parse_mode="Markdown",
             reply_markup=_user_manage_keyboard(

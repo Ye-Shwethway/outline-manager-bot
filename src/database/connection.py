@@ -150,6 +150,14 @@ def init_db():
             )
         ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS accounting_backfill_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                backfill_version TEXT,
+                completed_at_utc TEXT
+            )
+        ''')
+
         # 4. Notification Settings Table (single-row config)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS notification_settings (
