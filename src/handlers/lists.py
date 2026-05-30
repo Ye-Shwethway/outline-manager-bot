@@ -928,6 +928,10 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
 
         alias = parts[3]
         key_id = parts[4]
+        client = get_vpn_client(alias)
+        if not client:
+            await query.answer("Could not connect to server.", show_alert=True)
+            return
 
         customer = queries.get_customer(user_id)
         is_privileged = _is_privileged_account(user_id)
@@ -935,7 +939,31 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("Target user is not approved.", show_alert=True)
             return
 
+        try:
+            keys = client.get_keys()
+        except Exception as e:
+            logger.error(f"Assignment grant fetch error on {alias}: {e}")
+            await query.answer("Failed to fetch key details.", show_alert=True)
+            return
+
+        live_key = next((item for item in keys if str(item.key_id) == str(key_id)), None)
+        if not live_key:
+            await query.answer("Key not found on server.", show_alert=True)
+            return
+
         queries.set_key_assignment(alias, key_id, user_id)
+        queries.record_assignment_sale_grant(
+            alias,
+            key_id,
+            user_id,
+            int(live_key.data_limit or 0),
+            is_unlimited=not bool(live_key.data_limit),
+            metadata={
+                "source": "manage_user_flow",
+                "assigned_by_user_id": update.effective_user.id if update.effective_user else None,
+                "assigned_by_username": update.effective_user.username if update.effective_user else None,
+            },
+        )
         queries.add_key_lifecycle_event(
             server_alias=alias,
             key_id=key_id,
@@ -1720,8 +1748,39 @@ async def handle_manual_assign_user_input(update: Update, context: ContextTypes.
         )
         return
 
+    client = get_vpn_client(alias)
+    if not client:
+        context.user_data.pop(PENDING_ASSIGN_KEY, None)
+        await update.message.reply_text(
+            f"❌ Could not connect to server `{alias}`.",
+            parse_mode='Markdown'
+        )
+        return
+
     try:
+        live_keys = client.get_keys()
+        live_key = next((item for item in live_keys if str(item.key_id) == str(key_id)), None)
+        if not live_key:
+            await update.message.reply_text(
+                f"❌ Key `{key_id}` was not found on `{alias}` during assignment.",
+                parse_mode='Markdown'
+            )
+            context.user_data.pop(PENDING_ASSIGN_KEY, None)
+            return
+
         queries.set_key_assignment(alias, key_id, target_user_id)
+        queries.record_assignment_sale_grant(
+            alias,
+            key_id,
+            target_user_id,
+            int(live_key.data_limit or 0),
+            is_unlimited=not bool(live_key.data_limit),
+            metadata={
+                "source": "manual_assign_flow",
+                "assigned_by_user_id": user.id,
+                "assigned_by_username": actor_username or user.username,
+            },
+        )
         queries.add_key_lifecycle_event(
             server_alias=alias,
             key_id=key_id,

@@ -6,6 +6,7 @@ from telegram import Update
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes
+from src.config import OWNER_ID
 from src.utils.decorators import owner_only, admin_only
 from src.database import queries
 from src.services.backup_service import generate_backup_file, get_latest_backup_file
@@ -110,6 +111,32 @@ def _key_accounting_result_keyboard(alias: str) -> InlineKeyboardMarkup:
     )
 
 
+def _user_accounting_users_keyboard(users: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for item in users[:30]:
+        user_id = int(item["user_id"])
+        username = item.get("username") or "no-username"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"👤 {user_id} | @{str(username)[:18]}",
+                    callback_data=f"uacct|user|{user_id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("❎ Close", callback_data="uacct|close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _user_accounting_result_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("👥 Back Users", callback_data="uacct|users")],
+            [InlineKeyboardButton("❎ Close", callback_data="uacct|close")],
+        ]
+    )
+
+
 def _format_accounting_bytes(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
     bytes_value = max(int(total_bytes or 0), 0)
     unlimited_value = max(int(unlimited_count or 0), 0)
@@ -172,6 +199,69 @@ async def _build_key_accounting_text(alias: str, key_id: str) -> str | None:
                 f"- *{event_type}* | Bought: *{purchased_text}* | Used: *{consumed_text}*{customer_line} | {created}"
             )
 
+    return "\n".join(lines)
+
+
+def _accounting_subjects() -> list[dict]:
+    unique_users: dict[int, dict] = {
+        OWNER_ID: {"user_id": OWNER_ID, "username": None},
+    }
+    for item in queries.get_admin_profiles():
+        unique_users[int(item["user_id"])] = dict(item)
+    for item in (
+        queries.get_customers_by_status("pending")
+        + queries.get_customers_by_status("approved")
+        + queries.get_customers_by_status("rejected")
+    ):
+        unique_users[int(item["user_id"])] = {
+            "user_id": int(item["user_id"]),
+            "username": item.get("username"),
+        }
+    return sorted(unique_users.values(), key=lambda item: int(item["user_id"]))
+
+
+def _format_customer_accounting_text(user_id: int) -> str:
+    totals = queries.get_customer_accounting_totals(user_id) or {}
+    events = queries.get_service_accounting_events(customer_user_id=user_id, limit=10)
+    customer = queries.get_customer(user_id)
+    username = customer.get("username") if customer else None
+    admin_map = {int(item["user_id"]): item for item in queries.get_admin_profiles()}
+    if not username:
+        username = admin_map.get(user_id, {}).get("username")
+
+    role = "OWNER" if user_id == OWNER_ID else "ADMIN" if user_id in queries.get_admins() else "USER"
+    username_line = _format_username_markdown(username, default="(no username)")
+    lines = [
+        "👤 *User Accounting Diagnostic*",
+        "",
+        f"User ID: `{user_id}`",
+        f"Role: *{role}*",
+        f"Username: {username_line}",
+        f"Lifetime Bought: *{escape_markdown(_format_accounting_bytes(totals.get('total_purchased_bytes'), totals.get('unlimited_grant_count')), version=1)}*",
+        f"Lifetime Used: *{escape_markdown(_format_accounting_bytes(totals.get('total_consumed_bytes')), version=1)}*",
+        f"Purchase Events: *{int(totals.get('purchase_event_count') or 0)}*",
+        f"Renewal Events: *{int(totals.get('renewal_event_count') or 0)}*",
+        f"First Recorded UTC: *{escape_markdown(to_utc_display(totals.get('first_recorded_at_utc')), version=1)}*",
+        f"Last Grant UTC: *{escape_markdown(to_utc_display(totals.get('last_grant_at_utc')), version=1)}*",
+        f"Last Usage UTC: *{escape_markdown(to_utc_display(totals.get('last_consumed_at_utc')), version=1)}*",
+        "",
+        "*Recent Accounting Events*",
+    ]
+
+    if not events:
+        lines.append("- none")
+    else:
+        for event in events:
+            purchased_text = escape_markdown(
+                _format_accounting_bytes(event.get('purchased_bytes'), 1 if event.get('is_unlimited') else 0),
+                version=1,
+            )
+            consumed_text = escape_markdown(_format_accounting_bytes(event.get('consumed_bytes')), version=1)
+            event_type = escape_markdown(str(event.get('event_type') or 'unknown'), version=1)
+            created = escape_markdown(to_utc_display(event.get('created_at_utc')), version=1)
+            lines.append(
+                f"- *{event_type}* | Key: `{event.get('server_alias')}` / `{event.get('key_id')}` | Bought: *{purchased_text}* | Used: *{consumed_text}* | {created}"
+            )
     return "\n".join(lines)
 
 
@@ -616,6 +706,35 @@ async def key_accounting_diagnostic(update: Update, context: ContextTypes.DEFAUL
 
 
 @owner_only
+async def user_accounting_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    if len(context.args) == 0:
+        await update.message.reply_text(
+            "👤 *User Accounting Diagnostic*\n\nSelect a user to inspect lifetime accounting.",
+            parse_mode='Markdown',
+            reply_markup=_user_accounting_users_keyboard(_accounting_subjects()),
+        )
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: `/useraccounting` or `/useraccounting <user_id>`",
+            parse_mode='Markdown',
+        )
+        return
+
+    try:
+        user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ User ID must be a number.")
+        return
+
+    await update.message.reply_text(_format_customer_accounting_text(user_id), parse_mode='Markdown')
+
+
+@owner_only
 async def handle_key_usage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query or not query.data:
@@ -812,3 +931,45 @@ async def handle_key_accounting_callback(update: Update, context: ContextTypes.D
         return
 
     await query.answer("Unknown accounting action.", show_alert=True)
+
+
+@owner_only
+async def handle_user_accounting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    await query.answer()
+    parts = query.data.split("|")
+    if len(parts) < 2 or parts[0] != "uacct":
+        return
+
+    action = parts[1]
+    if action == "close":
+        await query.edit_message_text("✅ User accounting diagnostic panel closed.")
+        if query.message:
+            clear_if_matches(context, query.message.message_id)
+        return
+
+    if action == "users":
+        await query.edit_message_text(
+            "👤 *User Accounting Diagnostic*\n\nSelect a user to inspect lifetime accounting.",
+            parse_mode='Markdown',
+            reply_markup=_user_accounting_users_keyboard(_accounting_subjects()),
+        )
+        return
+
+    if action == "user" and len(parts) == 3:
+        try:
+            user_id = int(parts[2])
+        except ValueError:
+            await query.answer("Invalid user id.", show_alert=True)
+            return
+        await query.edit_message_text(
+            _format_customer_accounting_text(user_id),
+            parse_mode='Markdown',
+            reply_markup=_user_accounting_result_keyboard(),
+        )
+        return
+
+    await query.answer("Unknown user accounting action.", show_alert=True)

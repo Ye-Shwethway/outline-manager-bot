@@ -36,6 +36,18 @@ def _usage_lines(key, effective_used_bytes: int) -> tuple[str, str]:
     return (f"{used_gb:.2f} GB / Unlimited", "Unlimited")
 
 
+def _format_accounting_bytes(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
+    bytes_value = max(int(total_bytes or 0), 0)
+    unlimited_value = max(int(unlimited_count or 0), 0)
+    if bytes_value <= 0 and unlimited_value <= 0:
+        return "0.00 GB"
+    if unlimited_value <= 0:
+        return f"{bytes_value / BYTES_PER_GB:.2f} GB"
+    if bytes_value <= 0:
+        return f"Unlimited x{unlimited_value}"
+    return f"{bytes_value / BYTES_PER_GB:.2f} GB + Unlimited x{unlimited_value}"
+
+
 def _backup_recipients() -> list[int]:
     return sorted(set([OWNER_ID, *queries.get_admins()]))
 
@@ -129,6 +141,7 @@ def generate_backup_file(kind: str) -> str:
                 last_renewed_quota_text = (
                     f"{last_renewed_quota_gb:.2f} GB" if isinstance(last_renewed_quota_gb, (int, float)) else "N/A"
                 )
+                accounting = queries.get_key_accounting_totals(alias, key_id) or {}
                 lines.append(f"Key ID: {key_id}")
                 lines.append(f"Name: {key.name or 'Unnamed'}")
                 lines.append(f"Status: {_status_tag(key, sold_keys, effective_used_bytes)}")
@@ -146,8 +159,53 @@ def generate_backup_file(kind: str) -> str:
                 lines.append(f"Renew Count: {renew_count}")
                 lines.append(f"Last Renewed At UTC: {last_renewed_at_utc}")
                 lines.append(f"Last Renewed Quota GB: {last_renewed_quota_text}")
+                lines.append(f"Lifetime Bought: {_format_accounting_bytes(accounting.get('total_purchased_bytes'), accounting.get('unlimited_grant_count'))}")
+                lines.append(f"Lifetime Used: {_format_accounting_bytes(accounting.get('total_consumed_bytes'))}")
+                lines.append(f"Purchase Events: {int(accounting.get('purchase_event_count') or 0)}")
+                lines.append(f"Renewal Events: {int(accounting.get('renewal_event_count') or 0)}")
                 lines.append(f"Access URL: {key.access_url or 'N/A'}")
                 lines.append("")
+
+        customer_totals = queries.list_customer_accounting_totals()
+        lines.append("=== CUSTOMER ACCOUNTING TOTALS ===")
+        if not customer_totals:
+            lines.append("No customer accounting totals recorded.")
+        else:
+            admin_username_map = {
+                int(item["user_id"]): item.get("username")
+                for item in queries.get_admin_profiles()
+                if item.get("user_id") is not None
+            }
+            for item in customer_totals:
+                user_id = int(item["user_id"])
+                customer = queries.get_customer(user_id)
+                username = customer.get("username") if customer else None
+                if not username:
+                    username = admin_username_map.get(user_id)
+                lines.append(f"User ID: {user_id}")
+                lines.append(f"Username: @{username}" if username else "Username: N/A")
+                lines.append(f"Lifetime Bought: {_format_accounting_bytes(item.get('total_purchased_bytes'), item.get('unlimited_grant_count'))}")
+                lines.append(f"Lifetime Used: {_format_accounting_bytes(item.get('total_consumed_bytes'))}")
+                lines.append(f"Purchase Events: {int(item.get('purchase_event_count') or 0)}")
+                lines.append(f"Renewal Events: {int(item.get('renewal_event_count') or 0)}")
+                lines.append(f"Last Grant UTC: {to_utc_display(item.get('last_grant_at_utc'))}")
+                lines.append(f"Last Usage UTC: {to_utc_display(item.get('last_consumed_at_utc'))}")
+                lines.append("")
+
+        recent_events = queries.get_service_accounting_events(limit=100)
+        lines.append("=== RECENT ACCOUNTING EVENTS ===")
+        if not recent_events:
+            lines.append("No accounting events recorded.")
+        else:
+            for event in recent_events:
+                lines.append(
+                    f"{event.get('created_at_utc') or 'N/A'} | {event.get('event_type') or 'unknown'} | "
+                    f"{event.get('server_alias')} / {event.get('key_id')} | "
+                    f"User: {event.get('customer_user_id') or 'N/A'} | "
+                    f"Bought: {_format_accounting_bytes(event.get('purchased_bytes'), 1 if event.get('is_unlimited') else 0)} | "
+                    f"Used: {_format_accounting_bytes(event.get('consumed_bytes'))}"
+                )
+            lines.append("")
 
     Path(file_path).write_text("\n".join(lines), encoding="utf-8")
     return file_path

@@ -214,6 +214,28 @@ def record_key_data_grant(
         )
 
 
+def record_assignment_sale_grant(
+    server_alias: str,
+    key_id: str,
+    customer_user_id: int,
+    quota_bytes: int | None,
+    *,
+    is_unlimited: bool = False,
+    created_at_utc: str | None = None,
+    metadata: dict | None = None,
+):
+    record_key_data_grant(
+        server_alias,
+        key_id,
+        quota_bytes,
+        customer_user_id=customer_user_id,
+        is_renewal=False,
+        is_unlimited=is_unlimited,
+        created_at_utc=created_at_utc,
+        metadata=metadata,
+    )
+
+
 def get_key_accounting_totals(server_alias: str, key_id: str) -> dict | None:
     with get_connection() as conn:
         cursor = conn.execute(
@@ -247,6 +269,21 @@ def get_customer_accounting_totals(user_id: int) -> dict | None:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def list_customer_accounting_totals() -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            SELECT user_id, total_purchased_bytes, total_consumed_bytes, total_renewed_bytes,
+                   purchase_event_count, renewal_event_count, unlimited_grant_count,
+                   last_grant_bytes, last_grant_unlimited, first_recorded_at_utc,
+                   last_grant_at_utc, last_consumed_at_utc, updated_at_utc
+            FROM customer_accounting_totals
+            ORDER BY total_purchased_bytes DESC, total_consumed_bytes DESC, user_id ASC
+            '''
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def get_service_accounting_events(
