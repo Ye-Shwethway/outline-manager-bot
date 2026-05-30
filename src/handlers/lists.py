@@ -1554,6 +1554,17 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
     current_auto_disabled_at_utc = lifecycle.get("auto_disabled_at_utc")
 
     try:
+        live_keys = client.get_keys()
+        live_key = next((item for item in live_keys if str(item.key_id) == str(key_id)), None)
+        if not live_key:
+            await update.message.reply_text(
+                f"❌ Key `{key_id}` was not found on `{alias}` during renew.",
+                parse_mode='Markdown'
+            )
+            context.user_data.pop(PENDING_RENEW_KEY, None)
+            return
+        baseline_used_bytes = int(live_key.used_bytes or 0)
+
         if quota_gb == 0:
             client.delete_data_limit(key_id)
         else:
@@ -1565,7 +1576,13 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
             new_expiry_utc = add_days_from_utc(now_utc, int(days))
             queries.set_key_expiry(alias, key_id, new_expiry_utc)
 
-        queries.record_key_renewal(alias, key_id, quota_gb, renewed_at_utc=now_utc)
+        queries.record_key_renewal(
+            alias,
+            key_id,
+            quota_gb,
+            renewed_at_utc=now_utc,
+            baseline_used_bytes=baseline_used_bytes,
+        )
 
         if days is None:
             expiry_dt = parse_utc_iso(current_expiry_utc)

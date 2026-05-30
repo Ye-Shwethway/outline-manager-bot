@@ -316,8 +316,15 @@ def clear_key_expired(server_alias: str, key_id: str):
         )
 
 
-def record_key_renewal(server_alias: str, key_id: str, quota_gb: float | None, renewed_at_utc: str | None = None):
+def record_key_renewal(
+    server_alias: str,
+    key_id: str,
+    quota_gb: float | None,
+    renewed_at_utc: str | None = None,
+    baseline_used_bytes: int | None = None,
+):
     ts = renewed_at_utc or _utc_now_iso()
+    baseline_bytes = max(int(baseline_used_bytes or 0), 0)
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
         conn.execute(
@@ -326,15 +333,15 @@ def record_key_renewal(server_alias: str, key_id: str, quota_gb: float | None, r
             SET renew_count = COALESCE(renew_count, 0) + 1,
                 last_renewed_at_utc = ?,
                 last_renewed_quota_gb = ?,
-                last_observed_used_bytes = 0,
-                usage_reset_offset_bytes = 0,
+                last_observed_used_bytes = ?,
+                usage_reset_offset_bytes = ?,
                 max_effective_used_bytes = 0,
                 last_usage_sync_at_utc = ?,
                 is_expired = 0,
                 auto_disabled_at_utc = NULL
             WHERE server_alias = ? AND key_id = ?
             ''',
-            (ts, quota_gb, ts, server_alias, key_id),
+            (ts, quota_gb, baseline_bytes, -baseline_bytes, ts, server_alias, key_id),
         )
 
 
