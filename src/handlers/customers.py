@@ -586,6 +586,8 @@ def build_mykeys_snapshot_text(user_id: int) -> str:
         if live_key:
             lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
             raw_used_bytes = max(int(live_key.used_bytes or 0), 0)
+            if queries.clear_key_quota_block_if_restored(alias, key_id, lifecycle, live_key.data_limit, raw_used_bytes):
+                lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
             used_gb = raw_used_bytes / BYTES_PER_GB
             limit_bytes = int(live_key.data_limit or 0) or int(lifecycle.get("quota_block_limit_bytes") or 0) or int(lifecycle.get("configured_limit_bytes") or 0)
             limit_mode = lifecycle.get("configured_limit_mode")

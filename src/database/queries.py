@@ -839,6 +839,29 @@ def clear_key_quota_block(server_alias: str, key_id: str):
         )
 
 
+def clear_key_quota_block_if_restored(
+    server_alias: str,
+    key_id: str,
+    lifecycle: dict | None,
+    live_limit_bytes: int | None,
+    raw_used_bytes: int | None,
+) -> bool:
+    if not lifecycle or not lifecycle.get("quota_blocked_at_utc"):
+        return False
+
+    live_limit = max(int(live_limit_bytes or 0), 0)
+    raw_used = max(int(raw_used_bytes or 0), 0)
+    configured_mode = str(lifecycle.get("configured_limit_mode") or "").strip().lower()
+
+    restored_with_remaining_quota = live_limit > 0 and raw_used < live_limit
+    restored_as_unlimited = live_limit <= 0 and configured_mode == "unlimited"
+    if not (restored_with_remaining_quota or restored_as_unlimited):
+        return False
+
+    clear_key_quota_block(server_alias, key_id)
+    return True
+
+
 def clear_key_expired(server_alias: str, key_id: str):
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)

@@ -66,6 +66,8 @@ async def monitor_used_up_keys(context: ContextTypes.DEFAULT_TYPE):
             key_id = str(key.key_id)
             raw_used_bytes = max(int(key.used_bytes or 0), 0)
             lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
+            if queries.clear_key_quota_block_if_restored(alias, key_id, lifecycle, key.data_limit, raw_used_bytes):
+                lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
             limit_bytes = _enforced_limit_bytes(key, lifecycle)
             used_up = _is_key_used_up(limit_bytes, raw_used_bytes)
             already_blocked = bool(lifecycle.get("quota_blocked_at_utc"))
