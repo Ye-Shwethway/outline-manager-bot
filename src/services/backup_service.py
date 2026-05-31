@@ -117,7 +117,7 @@ def generate_backup_file(kind: str) -> str:
                 creator_username = key_creators.get(key_id) or "unknown"
                 lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
                 raw_used_bytes = max(int(key.used_bytes or 0), 0)
-                display_limit_bytes = int(lifecycle.get("configured_limit_bytes") or 0) or int(key.data_limit or 0) or int(lifecycle.get("quota_block_limit_bytes") or 0)
+                display_limit_bytes = int(key.data_limit or 0) or int(lifecycle.get("quota_block_limit_bytes") or 0) or int(lifecycle.get("configured_limit_bytes") or 0)
                 usage_key = type(
                     "DisplayKey",
                     (),

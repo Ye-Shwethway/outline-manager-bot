@@ -77,12 +77,12 @@ def _raw_used_bytes(key) -> int:
 
 
 def _display_limit_bytes(key, lifecycle: dict) -> int:
-    if lifecycle.get("configured_limit_bytes"):
-        return int(lifecycle.get("configured_limit_bytes") or 0)
     if key.data_limit:
         return int(key.data_limit)
     if lifecycle.get("quota_block_limit_bytes"):
         return int(lifecycle.get("quota_block_limit_bytes") or 0)
+    if lifecycle.get("configured_limit_bytes"):
+        return int(lifecycle.get("configured_limit_bytes") or 0)
     return 0
 
 
@@ -95,17 +95,17 @@ def _is_unlimited_config(lifecycle: dict, key) -> bool:
 
 
 def _assignment_sale_grant_params(lifecycle: dict, live_key) -> tuple[int, bool]:
-    configured_bytes = int(lifecycle.get("configured_limit_bytes") or 0)
-    if configured_bytes > 0:
-        return configured_bytes, False
-    if lifecycle.get("configured_limit_mode") == "unlimited":
-        return 0, True
     live_limit_bytes = max(int(live_key.data_limit or 0), 0)
     if live_limit_bytes > 0:
         return live_limit_bytes, False
     quota_block_bytes = int(lifecycle.get("quota_block_limit_bytes") or 0)
     if quota_block_bytes > 0:
         return quota_block_bytes, False
+    configured_bytes = int(lifecycle.get("configured_limit_bytes") or 0)
+    if configured_bytes > 0:
+        return configured_bytes, False
+    if lifecycle.get("configured_limit_mode") == "unlimited":
+        return 0, True
     return 0, False
 
 
@@ -683,7 +683,6 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
         for key in keys:
             raw_used_bytes = _raw_used_bytes(key)
             used_gb = raw_used_bytes / BYTES_PER_GB
-            limit_str = f"{limit_gb:.2f} GB" if isinstance(limit_gb, float) else limit_gb
             lifecycle = queries.get_key_lifecycle(alias, str(key.key_id)) or {}
             limit_bytes = _display_limit_bytes(key, lifecycle)
             limit_gb = limit_bytes / BYTES_PER_GB if limit_bytes else ("Unlimited" if _is_unlimited_config(lifecycle, key) else "Not Set")
@@ -721,10 +720,7 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             key_name_text = _format_text_markdown(key.name, default="Unnamed")
             
             msg += f"ID: `{key.key_id}` | Name: *{key_name_text}* {status_tag}{creator_tag}\n"
-            if isinstance(limit_gb, float):
-                msg += f"Usage: {used_gb:.2f} GB / {limit_gb:.2f} GB\n"
-            else:
-                msg += f"Usage: {used_gb:.2f} GB / Unlimited\n"
+            msg += f"Usage: {used_gb:.2f} GB / {limit_str}\n"
             msg += f"Expiry: {expiry_text} ({expiry_tag})\n"
             msg += f"Owner: {owner_id_line}\n"
             msg += f"Owner Username: {owner_username_line}\n"

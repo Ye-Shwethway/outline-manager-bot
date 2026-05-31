@@ -862,6 +862,7 @@ def record_key_renewal(
 ):
     ts = renewed_at_utc or _utc_now_iso()
     baseline_bytes = max(int(baseline_used_bytes or 0), 0)
+    configured_bytes = None if float(quota_gb or 0) == 0 else baseline_bytes + int(float(quota_gb or 0) * 1_000_000_000)
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
         _ensure_key_accounting_row(conn, server_alias, key_id)
@@ -884,7 +885,7 @@ def record_key_renewal(
                 ts,
                 quota_gb,
                 "unlimited" if float(quota_gb or 0) == 0 else "limited",
-                None if float(quota_gb or 0) == 0 else int(float(quota_gb or 0) * 1_000_000_000),
+                configured_bytes,
                 server_alias,
                 key_id,
             ),

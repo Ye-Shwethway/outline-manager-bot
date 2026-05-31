@@ -10,9 +10,6 @@ logger = logging.getLogger(__name__)
 
 def _enforced_limit_bytes(key, lifecycle: dict) -> int:
     configured_mode = str(lifecycle.get("configured_limit_mode") or "").strip().lower()
-    configured_bytes = max(int(lifecycle.get("configured_limit_bytes") or 0), 0)
-    if configured_mode == "limited" and configured_bytes > 0:
-        return configured_bytes
     if configured_mode == "unlimited":
         return 0
 
@@ -23,6 +20,10 @@ def _enforced_limit_bytes(key, lifecycle: dict) -> int:
     quota_block_bytes = max(int(lifecycle.get("quota_block_limit_bytes") or 0), 0)
     if quota_block_bytes > 0:
         return quota_block_bytes
+
+    configured_bytes = max(int(lifecycle.get("configured_limit_bytes") or 0), 0)
+    if configured_mode == "limited" and configured_bytes > 0:
+        return configured_bytes
     return 0
 
 

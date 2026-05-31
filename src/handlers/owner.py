@@ -167,15 +167,15 @@ def _format_accounting_bytes(total_bytes: int | None, unlimited_count: int | Non
 
 
 def _owner_display_limit_bytes(lifecycle: dict, live_limit_bytes: int | None) -> int:
-    configured_bytes = int(lifecycle.get('configured_limit_bytes') or 0)
-    if configured_bytes > 0:
-        return configured_bytes
     live_bytes = max(int(live_limit_bytes or 0), 0)
     if live_bytes > 0:
         return live_bytes
     quota_block_bytes = int(lifecycle.get('quota_block_limit_bytes') or 0)
     if quota_block_bytes > 0:
         return quota_block_bytes
+    configured_bytes = int(lifecycle.get('configured_limit_bytes') or 0)
+    if configured_bytes > 0:
+        return configured_bytes
     return 0
 
 
