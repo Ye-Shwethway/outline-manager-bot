@@ -881,11 +881,10 @@ def record_key_renewal(
     key_id: str,
     quota_gb: float | None,
     renewed_at_utc: str | None = None,
-    baseline_used_bytes: int | None = None,
+    absolute_limit_bytes: int | None = None,
 ):
     ts = renewed_at_utc or _utc_now_iso()
-    baseline_bytes = max(int(baseline_used_bytes or 0), 0)
-    configured_bytes = None if float(quota_gb or 0) == 0 else baseline_bytes + int(float(quota_gb or 0) * 1_000_000_000)
+    configured_bytes = None if float(quota_gb or 0) == 0 else max(int(absolute_limit_bytes or 0), 0)
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
         _ensure_key_accounting_row(conn, server_alias, key_id)

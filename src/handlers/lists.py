@@ -392,7 +392,7 @@ async def _show_renew_duration_picker(query, alias: str, key_id: str):
         _render_renew_key_snapshot_text(
             snapshot,
             "Choose the expiry extension first.\n"
-            "After that, you will type the new quota manually.",
+            "After that, you will type the additional quota to add manually.",
         ),
         parse_mode='Markdown',
         reply_markup=_renew_duration_keyboard(alias, key_id),
@@ -414,7 +414,7 @@ async def _prompt_manual_renew_quota(query, context: ContextTypes.DEFAULT_TYPE, 
     }
 
     footer = (
-        "Send the new quota in your next message.\n"
+        "Send the additional quota to add in your next message.\n"
         "Examples: `50`, `75.5`, or `unlimited`.\n"
         "Type `cancel` to abort."
     )
@@ -432,6 +432,10 @@ async def _prompt_manual_renew_quota(query, context: ContextTypes.DEFAULT_TYPE, 
 
 def _quota_bytes_from_gb(quota_gb: float) -> int:
     return int(quota_gb * BYTES_PER_GB)
+
+
+def _renew_base_limit_bytes(key, lifecycle: dict) -> int:
+    return _display_limit_bytes(key, lifecycle)
 
 
 async def renew_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1687,12 +1691,14 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
             )
             context.user_data.pop(PENDING_RENEW_KEY, None)
             return
-        baseline_used_bytes = int(live_key.used_bytes or 0)
+        current_limit_bytes = _renew_base_limit_bytes(live_key, lifecycle)
+        added_quota_bytes = _quota_bytes_from_gb(quota_gb)
+        new_limit_bytes = current_limit_bytes + added_quota_bytes if quota_gb > 0 else 0
 
         if quota_gb == 0:
             client.delete_data_limit(key_id)
         else:
-            client.add_data_limit(key_id, baseline_used_bytes + _quota_bytes_from_gb(quota_gb))
+            client.add_data_limit(key_id, new_limit_bytes)
 
         now_utc = utc_now_iso()
         new_expiry_utc = current_expiry_utc
@@ -1705,7 +1711,7 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
             key_id,
             quota_gb,
             renewed_at_utc=now_utc,
-            baseline_used_bytes=baseline_used_bytes,
+            absolute_limit_bytes=new_limit_bytes,
         )
         assigned_user_id = int(lifecycle["assigned_user_id"]) if lifecycle.get("assigned_user_id") else None
         queries.record_key_data_grant(
@@ -1748,7 +1754,8 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
             created_at_utc=now_utc,
         )
 
-        quota_text = "Unlimited" if quota_gb == 0 else f"{quota_gb:.2f} GB"
+        added_quota_text = "Unlimited" if quota_gb == 0 else f"{quota_gb:.2f} GB"
+        total_limit_text = "Unlimited" if quota_gb == 0 else f"{new_limit_bytes / BYTES_PER_GB:.2f} GB"
         expiry_text = "Unchanged" if days is None else to_yangon_display(new_expiry_utc)
         policy_text = "Quota only" if days is None else f"Quota + expiry (+{int(days)} days from now)"
         await update.message.reply_text(
@@ -1756,7 +1763,8 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
                 "✅ *Renew Completed*\n\n"
                 f"Server: `{alias}`\n"
                 f"Key ID: `{key_id}`\n"
-                f"New Quota: *{quota_text}*\n"
+                f"Added Quota: *{added_quota_text}*\n"
+                f"Total Limit: *{total_limit_text}*\n"
                 f"Expiry: *{expiry_text}*\n"
                 f"Mode: *{policy_text}*"
             ),
