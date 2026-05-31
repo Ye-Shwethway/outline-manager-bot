@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import asyncio
+from datetime import datetime, timezone
 from telegram import Update
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.helpers import escape_markdown
@@ -163,6 +164,28 @@ def _format_accounting_bytes(total_bytes: int | None, unlimited_count: int | Non
     if bytes_value <= 0:
         return f"Unlimited x{unlimited_value}"
     return f"{bytes_value / BYTES_PER_GB:.2f} GB + Unlimited x{unlimited_value}"
+
+
+def _owner_display_limit_bytes(lifecycle: dict, live_limit_bytes: int | None) -> int:
+    configured_bytes = int(lifecycle.get('configured_limit_bytes') or 0)
+    if configured_bytes > 0:
+        return configured_bytes
+    live_bytes = max(int(live_limit_bytes or 0), 0)
+    if live_bytes > 0:
+        return live_bytes
+    quota_block_bytes = int(lifecycle.get('quota_block_limit_bytes') or 0)
+    if quota_block_bytes > 0:
+        return quota_block_bytes
+    return 0
+
+
+def _owner_is_unlimited_config(lifecycle: dict, live_limit_bytes: int | None) -> bool:
+    mode = str(lifecycle.get('configured_limit_mode') or '').strip().lower()
+    if mode == 'unlimited':
+        return True
+    if mode == 'limited':
+        return False
+    return max(int(live_limit_bytes or 0), 0) <= 0 and not lifecycle.get('quota_blocked_at_utc') and not lifecycle.get('is_expired')
 
 
 async def _build_key_accounting_text(alias: str, key_id: str) -> str | None:
@@ -344,22 +367,21 @@ async def _build_keyusage_diagnostic_text(alias: str, key_id: str) -> str | None
         return None
 
     raw_used_bytes = max(int(target_key.used_bytes or 0), 0)
-    effective_used_bytes = queries.observe_key_usage(alias, str(key_id), raw_used_bytes)
     lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
 
-    limit_bytes = int(target_key.data_limit or 0)
+    limit_bytes = _owner_display_limit_bytes(lifecycle, target_key.data_limit)
     raw_remaining_bytes = max(limit_bytes - raw_used_bytes, 0) if limit_bytes else 0
-    effective_remaining_bytes = max(limit_bytes - effective_used_bytes, 0) if limit_bytes else 0
     key_name = escape_markdown(str(target_key.name or 'Unnamed'), version=1)
 
     if limit_bytes:
         limit_line = f"{limit_bytes / BYTES_PER_GB:.2f} GB"
         raw_remaining_line = f"{raw_remaining_bytes / BYTES_PER_GB:.2f} GB"
-        effective_remaining_line = f"{effective_remaining_bytes / BYTES_PER_GB:.2f} GB"
-    else:
+    elif _owner_is_unlimited_config(lifecycle, target_key.data_limit):
         limit_line = "Unlimited"
         raw_remaining_line = "Unlimited"
-        effective_remaining_line = "Unlimited"
+    else:
+        limit_line = "Not set"
+        raw_remaining_line = "Not set"
 
     return (
         "🧪 *Key Usage Diagnostic*\n\n"
@@ -370,14 +392,7 @@ async def _build_keyusage_diagnostic_text(alias: str, key_id: str) -> str | None
         "*Live Outline Counter*\n"
         f"Raw Used: *{raw_used_bytes / BYTES_PER_GB:.2f} GB*\n"
         f"Raw Remaining: *{raw_remaining_line}*\n\n"
-        "*Bot Effective Counter*\n"
-        f"Effective Used: *{effective_used_bytes / BYTES_PER_GB:.2f} GB*\n"
-        f"Effective Remaining: *{effective_remaining_line}*\n\n"
-        "*Tracking State*\n"
-        f"Last Observed Raw: *{int(lifecycle.get('last_observed_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Reset Offset: *{int(lifecycle.get('usage_reset_offset_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Max Effective Used: *{int(lifecycle.get('max_effective_used_bytes') or 0) / BYTES_PER_GB:.2f} GB*\n"
-        f"Last Usage Sync UTC: *{escape_markdown(to_utc_display(lifecycle.get('last_usage_sync_at_utc')), version=1)}*"
+        "Usage Source: *Live Outline Raw Counter*"
     )
 
 
@@ -415,6 +430,39 @@ async def _notify_admins_review_mode_change(context: ContextTypes.DEFAULT_TYPE, 
 
     context.application.bot_data["review_mode_broadcast_last_ts"] = now_ts
     return True, 0
+
+
+async def _broadcast_update_to_admins(
+    context: ContextTypes.DEFAULT_TYPE,
+    update_body: str,
+    actor_user_id: int,
+    actor_username: str | None,
+) -> tuple[int, list[int]]:
+    admin_ids = queries.get_admins()
+    if not admin_ids:
+        return 0, []
+
+    actor_line = escape_markdown(f"@{actor_username}", version=1) if actor_username else f"`{actor_user_id}`"
+    body_safe = escape_markdown(update_body.strip(), version=1)
+    time_line = escape_markdown(to_utc_display(datetime.now(timezone.utc).isoformat()), version=1)
+    text = (
+        "📢 *Bot Update Notice*\n\n"
+        f"From: {actor_line}\n"
+        f"Time UTC: *{time_line}*\n\n"
+        f"{body_safe}"
+    )
+
+    sent_count = 0
+    failed_ids: list[int] = []
+    for admin_id in admin_ids:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='Markdown')
+            sent_count += 1
+        except Exception as e:
+            logger.info(f"Could not send update broadcast to admin {admin_id}: {e}")
+            failed_ids.append(admin_id)
+
+    return sent_count, failed_ids
 
 @owner_only
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -493,7 +541,7 @@ async def add_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid API URL. It must start with http:// or https://")
         return
 
-    # By default, max_key_count is 0 (which we will treat as unlimited)
+    # By default, max_key_count is stored as unlimited when no positive cap is set.
     if queries.add_server(alias, api_url, cert_sha256):
         await update.message.reply_text(f"✅ Server `{alias}` added successfully.", parse_mode='Markdown')
     else:
@@ -529,7 +577,7 @@ async def delete_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def set_key_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 2:
-        await update.message.reply_text("Usage: `/setkeylimit <server_alias> <max_number_of_keys>`\nExample: `/setkeylimit vps1 20`\n(Set to 0 for unlimited)", parse_mode='Markdown')
+        await update.message.reply_text("Usage: `/setkeylimit <server_alias> <max_number_of_keys>`\nExample: `/setkeylimit vps1 20`", parse_mode='Markdown')
         return
     
     alias, limit_str = context.args
@@ -618,6 +666,47 @@ async def set_review_notifications(update: Update, context: ContextTypes.DEFAULT
             f"Current recipients: *{scope_text}*."
             f"{cooldown_note}"
         ),
+        parse_mode='Markdown',
+    )
+
+
+@owner_only
+async def broadcast_admin_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command: /adminupdate <message> - owner broadcasts update notes to all admins."""
+    if not update.message:
+        return
+
+    update_body = update.message.text.partition(' ')[2].strip() if update.message.text else ""
+    if not update_body:
+        await update.message.reply_text(
+            (
+                "Usage: `/adminupdate <update text>`\n"
+                "Example: `/adminupdate Renew flow refined. Admins can now renew quota without changing expiry, and key accounting diagnostics are live.`"
+            ),
+            parse_mode='Markdown',
+        )
+        return
+
+    actor = update.effective_user
+    actor_user_id = actor.id if actor else OWNER_ID
+    actor_username = actor.username if actor else None
+    sent_count, failed_ids = await _broadcast_update_to_admins(
+        context,
+        update_body,
+        actor_user_id,
+        actor_username,
+    )
+
+    if sent_count == 0 and not failed_ids:
+        await update.message.reply_text("ℹ️ No admins are configured yet, so nothing was broadcast.")
+        return
+
+    failed_text = ""
+    if failed_ids:
+        failed_text = "\nFailed admin ids: " + ", ".join(str(item) for item in failed_ids)
+
+    await update.message.reply_text(
+        f"📢 Update broadcast finished. Sent to *{sent_count}* admin(s).{failed_text}",
         parse_mode='Markdown',
     )
 

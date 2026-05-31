@@ -584,17 +584,22 @@ def build_mykeys_snapshot_text(user_id: int) -> str:
 
         live_key = server_key_map.get(alias, {}).get(key_id)
         if live_key:
-            used_bytes = queries.observe_key_usage(alias, key_id, live_key.used_bytes or 0)
-            used_gb = used_bytes / BYTES_PER_GB
-            if live_key.data_limit:
-                limit_bytes = live_key.data_limit
+            lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
+            raw_used_bytes = max(int(live_key.used_bytes or 0), 0)
+            used_gb = raw_used_bytes / BYTES_PER_GB
+            limit_bytes = int(lifecycle.get("configured_limit_bytes") or 0) or int(live_key.data_limit or 0) or int(lifecycle.get("quota_block_limit_bytes") or 0)
+            limit_mode = lifecycle.get("configured_limit_mode")
+            if limit_bytes:
                 limit_gb = limit_bytes / BYTES_PER_GB
-                remaining_gb = max(limit_bytes - used_bytes, 0) / BYTES_PER_GB
+                remaining_gb = 0.0 if lifecycle.get("quota_blocked_at_utc") else max(limit_bytes - raw_used_bytes, 0) / BYTES_PER_GB
                 usage_line = f"Usage: *{used_gb:.2f} GB / {limit_gb:.2f} GB*"
                 remaining_line = f"Remaining: *{remaining_gb:.2f} GB*"
-            else:
+            elif limit_mode == "unlimited":
                 usage_line = f"Usage: *{used_gb:.2f} GB / Unlimited*"
                 remaining_line = "Remaining: *Unlimited*"
+            else:
+                usage_line = f"Usage: *{used_gb:.2f} GB / Not set*"
+                remaining_line = "Remaining: *Not set*"
             key_url_line = f"🔵 *Key URL:* `{live_key.access_url}`" if live_key.access_url else "🔵 *Key URL:* *Unavailable right now*"
         else:
             usage_line = "Usage: *Unavailable right now*"

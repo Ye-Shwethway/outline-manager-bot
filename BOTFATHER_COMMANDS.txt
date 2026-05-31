@@ -18,6 +18,7 @@ approve - Approve a user
 reject - Reject a user
 removeuser - Remove or unban a user
 addadmin - Owner add admin
+adminupdate - Owner broadcast update to admins
 removeadmin - Owner remove admin
 listadmin - Owner list admins
 addserver - Owner add server

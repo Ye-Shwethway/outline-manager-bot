@@ -471,22 +471,6 @@ def _backfill_key_accounting_from_history(conn, key_row: sqlite3.Row) -> bool:
         )
         saw_grant_event = True
 
-    max_effective_used_bytes = max(int(key_row['max_effective_used_bytes'] or 0), 0)
-    if max_effective_used_bytes > 0:
-        _record_accounting_event(
-            conn,
-            server_alias,
-            key_id,
-            event_type='usage_delta',
-            customer_user_id=current_assigned_user_id,
-            purchased_bytes=0,
-            consumed_bytes=max_effective_used_bytes,
-            is_unlimited=False,
-            metadata={'source': 'current_usage_snapshot_backfill'},
-            created_at_utc=key_row['last_usage_sync_at_utc'] or key_row['created_at_utc'] or _utc_now_iso(),
-        )
-        saw_usage_event = True
-
     return saw_grant_event or saw_usage_event
 
 
@@ -499,8 +483,7 @@ def run_accounting_backfill(version: str = 'v1') -> dict:
         cursor = conn.execute(
             '''
             SELECT server_alias, key_id, assigned_user_id, last_renewed_at_utc,
-                   last_renewed_quota_gb, max_effective_used_bytes,
-                   last_usage_sync_at_utc, created_at_utc
+                                         last_renewed_quota_gb, created_at_utc
             FROM key_metadata
             ORDER BY server_alias, key_id
             '''
@@ -765,6 +748,31 @@ def set_key_expiry(server_alias: str, key_id: str, expiry_at_utc: str | None):
         )
 
 
+def set_key_configured_limit(
+    server_alias: str,
+    key_id: str,
+    quota_bytes: int | None,
+    *,
+    limit_mode: str,
+):
+    mode = (limit_mode or "").strip().lower()
+    if mode not in {"limited", "unlimited"}:
+        raise ValueError("limit_mode must be 'limited' or 'unlimited'")
+
+    configured_bytes = max(int(quota_bytes or 0), 0) if mode == "limited" else None
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET configured_limit_mode = ?,
+                configured_limit_bytes = ?
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (mode, configured_bytes, server_alias, key_id),
+        )
+
+
 def set_key_assignment(server_alias: str, key_id: str, assigned_user_id: int | None):
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
@@ -801,6 +809,36 @@ def mark_key_expired(server_alias: str, key_id: str, auto_disabled_at_utc: str |
         )
 
 
+def mark_key_quota_blocked(server_alias: str, key_id: str, limit_bytes: int, blocked_at_utc: str | None = None):
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET quota_blocked_at_utc = ?,
+                quota_block_limit_bytes = ?,
+                used_up_notified = 1
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (blocked_at_utc or _utc_now_iso(), max(int(limit_bytes or 0), 0), server_alias, key_id),
+        )
+
+
+def clear_key_quota_block(server_alias: str, key_id: str):
+    with get_connection() as conn:
+        _ensure_key_metadata_row(conn, server_alias, key_id)
+        conn.execute(
+            '''
+            UPDATE key_metadata
+            SET quota_blocked_at_utc = NULL,
+                quota_block_limit_bytes = NULL,
+                used_up_notified = 0
+            WHERE server_alias = ? AND key_id = ?
+            ''',
+            (server_alias, key_id),
+        )
+
+
 def clear_key_expired(server_alias: str, key_id: str):
     with get_connection() as conn:
         _ensure_key_metadata_row(conn, server_alias, key_id)
@@ -833,15 +871,23 @@ def record_key_renewal(
             SET renew_count = COALESCE(renew_count, 0) + 1,
                 last_renewed_at_utc = ?,
                 last_renewed_quota_gb = ?,
-                last_observed_used_bytes = ?,
-                usage_reset_offset_bytes = ?,
-                max_effective_used_bytes = 0,
-                last_usage_sync_at_utc = ?,
+                configured_limit_mode = ?,
+                configured_limit_bytes = ?,
                 is_expired = 0,
-                auto_disabled_at_utc = NULL
+                auto_disabled_at_utc = NULL,
+                quota_blocked_at_utc = NULL,
+                quota_block_limit_bytes = NULL,
+                used_up_notified = 0
             WHERE server_alias = ? AND key_id = ?
             ''',
-            (ts, quota_gb, baseline_bytes, -baseline_bytes, ts, server_alias, key_id),
+            (
+                ts,
+                quota_gb,
+                "unlimited" if float(quota_gb or 0) == 0 else "limited",
+                None if float(quota_gb or 0) == 0 else int(float(quota_gb or 0) * 1_000_000_000),
+                server_alias,
+                key_id,
+            ),
         )
 
 
@@ -849,10 +895,10 @@ def get_key_lifecycle(server_alias: str, key_id: str) -> dict | None:
     with get_connection() as conn:
         cursor = conn.execute(
             '''
-            SELECT expiry_at_utc, is_expired, auto_disabled_at_utc, assigned_user_id,
-                   renew_count, last_renewed_at_utc, last_renewed_quota_gb,
-                   last_observed_used_bytes, usage_reset_offset_bytes, max_effective_used_bytes,
-                   last_usage_sync_at_utc, created_at_utc
+                 SELECT expiry_at_utc, is_expired, auto_disabled_at_utc,
+                     configured_limit_mode, configured_limit_bytes, assigned_user_id,
+                     quota_blocked_at_utc, quota_block_limit_bytes,
+                                     renew_count, last_renewed_at_utc, last_renewed_quota_gb, created_at_utc
             FROM key_metadata
             WHERE server_alias = ? AND key_id = ?
             ''',
@@ -860,74 +906,6 @@ def get_key_lifecycle(server_alias: str, key_id: str) -> dict | None:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
-
-
-def observe_key_usage(server_alias: str, key_id: str, live_used_bytes: int | None, observed_at_utc: str | None = None) -> int:
-    """Tracks effective usage so quota cannot increase when upstream counters reset."""
-    ts = observed_at_utc or _utc_now_iso()
-    live_bytes = max(int(live_used_bytes or 0), 0)
-
-    with get_connection() as conn:
-        _ensure_key_metadata_row(conn, server_alias, key_id)
-        cursor = conn.execute(
-            '''
-            SELECT last_observed_used_bytes, usage_reset_offset_bytes, max_effective_used_bytes, assigned_user_id
-            FROM key_metadata
-            WHERE server_alias = ? AND key_id = ?
-            ''',
-            (server_alias, key_id),
-        )
-        row = cursor.fetchone()
-
-        last_observed = int(row["last_observed_used_bytes"] or 0) if row else 0
-        reset_offset = int(row["usage_reset_offset_bytes"] or 0) if row else 0
-        max_effective = int(row["max_effective_used_bytes"] or 0) if row else 0
-        assigned_user_id = int(row["assigned_user_id"]) if row and row["assigned_user_id"] else None
-        previous_max_effective = max_effective
-
-        if last_observed > live_bytes + USAGE_RESET_TOLERANCE_BYTES:
-            reset_offset += last_observed
-
-        effective_used = reset_offset + live_bytes
-        if effective_used < max_effective:
-            effective_used = max_effective
-        else:
-            max_effective = effective_used
-
-        consumed_delta = max(effective_used - previous_max_effective, 0)
-
-        conn.execute(
-            '''
-            UPDATE key_metadata
-            SET last_observed_used_bytes = ?,
-                usage_reset_offset_bytes = ?,
-                max_effective_used_bytes = ?,
-                last_usage_sync_at_utc = ?
-            WHERE server_alias = ? AND key_id = ?
-            ''',
-            (live_bytes, reset_offset, max_effective, ts, server_alias, key_id),
-        )
-
-        _ensure_key_accounting_row(conn, server_alias, key_id)
-        if consumed_delta > 0:
-            _record_accounting_event(
-                conn,
-                server_alias,
-                key_id,
-                event_type='usage_delta',
-                customer_user_id=assigned_user_id,
-                purchased_bytes=0,
-                consumed_bytes=consumed_delta,
-                is_unlimited=False,
-                metadata={
-                    'live_used_bytes': live_bytes,
-                    'effective_used_bytes': effective_used,
-                    'delta_bytes': consumed_delta,
-                },
-                created_at_utc=ts,
-            )
-
-    return effective_used
 
 
 def list_keys_needing_expiry_check(now_utc: str) -> list[dict]:

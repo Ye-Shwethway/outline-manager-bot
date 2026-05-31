@@ -72,8 +72,57 @@ def _format_text_markdown(value: str | None, default: str = "N/A") -> str:
     return escape_markdown(str(value), version=1)
 
 
-def _effective_used_bytes(alias: str, key) -> int:
-    return queries.observe_key_usage(alias, str(key.key_id), key.used_bytes or 0)
+def _raw_used_bytes(key) -> int:
+    return max(int(key.used_bytes or 0), 0)
+
+
+def _display_limit_bytes(key, lifecycle: dict) -> int:
+    if lifecycle.get("configured_limit_bytes"):
+        return int(lifecycle.get("configured_limit_bytes") or 0)
+    if key.data_limit:
+        return int(key.data_limit)
+    if lifecycle.get("quota_block_limit_bytes"):
+        return int(lifecycle.get("quota_block_limit_bytes") or 0)
+    return 0
+
+
+def _is_unlimited_config(lifecycle: dict, key) -> bool:
+    if lifecycle.get("configured_limit_mode") == "unlimited":
+        return True
+    if lifecycle.get("configured_limit_mode") == "limited":
+        return False
+    return bool(key.data_limit is None)
+
+
+def _assignment_sale_grant_params(lifecycle: dict, live_key) -> tuple[int, bool]:
+    configured_bytes = int(lifecycle.get("configured_limit_bytes") or 0)
+    if configured_bytes > 0:
+        return configured_bytes, False
+    if lifecycle.get("configured_limit_mode") == "unlimited":
+        return 0, True
+    live_limit_bytes = max(int(live_key.data_limit or 0), 0)
+    if live_limit_bytes > 0:
+        return live_limit_bytes, False
+    quota_block_bytes = int(lifecycle.get("quota_block_limit_bytes") or 0)
+    if quota_block_bytes > 0:
+        return quota_block_bytes, False
+    return 0, False
+
+
+def _is_quota_blocked(lifecycle: dict) -> bool:
+    return bool(lifecycle.get("quota_blocked_at_utc"))
+
+
+def _status_line_for_display(key_id: str, sold_keys: set[str], lifecycle: dict, raw_used_bytes: int, limit_bytes: int) -> str:
+    if lifecycle.get("is_expired"):
+        return "⛔ EXPIRED"
+    if _is_quota_blocked(lifecycle):
+        return "⛔ QUOTA BLOCKED"
+    if limit_bytes and raw_used_bytes >= limit_bytes:
+        return "🟠 USED UP"
+    if str(key_id) in sold_keys:
+        return "🔴 SOLD"
+    return "🟢 AVAILABLE"
 
 
 def _format_lifetime_bytes(total_bytes: int | None, unlimited_count: int | None = 0) -> str:
@@ -181,25 +230,21 @@ def _build_renew_key_snapshot(alias: str, key_id: str) -> tuple[dict | None, str
     lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
     sold_keys = queries.get_sold_keys(alias)
     is_sold = str(key_id) in sold_keys
-    used_bytes = _effective_used_bytes(alias, target_key)
-    used_gb = used_bytes / BYTES_PER_GB
+    raw_used_bytes = _raw_used_bytes(target_key)
+    limit_bytes = _display_limit_bytes(target_key, lifecycle)
+    used_gb = raw_used_bytes / BYTES_PER_GB
 
-    if target_key.data_limit:
-        limit_gb = target_key.data_limit / BYTES_PER_GB
+    if limit_bytes:
+        limit_gb = limit_bytes / BYTES_PER_GB
         quota_line = f"{limit_gb:.2f} GB"
         usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
-        is_used_up = used_bytes >= target_key.data_limit
-    else:
+    elif _is_unlimited_config(lifecycle, target_key):
         quota_line = "Unlimited"
         usage_line = f"{used_gb:.2f} GB / Unlimited"
-        is_used_up = False
-
-    if is_used_up:
-        status_line = "🟠 USED UP"
-    elif is_sold:
-        status_line = "🔴 SOLD"
     else:
-        status_line = "🟢 AVAILABLE"
+        quota_line = "Not set"
+        usage_line = f"{used_gb:.2f} GB / Not set"
+    status_line = _status_line_for_display(str(key_id), sold_keys, lifecycle, raw_used_bytes, limit_bytes)
 
     expiry_at_utc = lifecycle.get("expiry_at_utc")
     expiry_state = "Expired" if lifecycle.get("is_expired") else "Active"
@@ -361,7 +406,7 @@ async def _prompt_manual_renew_quota(query, context: ContextTypes.DEFAULT_TYPE, 
 
     footer = (
         "Send the new quota in your next message.\n"
-        "Examples: `50`, `75.5`, `0`, or `unlimited`.\n"
+        "Examples: `50`, `75.5`, or `unlimited`.\n"
         "Type `cancel` to abort."
     )
     if days is None:
@@ -423,13 +468,16 @@ async def _render_key_management_panel(
     sold_keys = queries.get_sold_keys(alias)
     is_sold = str(key_id) in sold_keys
     lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-    used_bytes = _effective_used_bytes(alias, target_key)
-    used_gb = used_bytes / BYTES_PER_GB
-    if target_key.data_limit:
-        limit_gb = target_key.data_limit / BYTES_PER_GB
+    raw_used_bytes = _raw_used_bytes(target_key)
+    used_gb = raw_used_bytes / BYTES_PER_GB
+    limit_bytes = _display_limit_bytes(target_key, lifecycle)
+    if limit_bytes:
+        limit_gb = limit_bytes / BYTES_PER_GB
         usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
-    else:
+    elif _is_unlimited_config(lifecycle, target_key):
         usage_line = f"{used_gb:.2f} GB / Unlimited"
+    else:
+        usage_line = f"{used_gb:.2f} GB / Not set"
 
     expiry_at_utc = lifecycle.get("expiry_at_utc")
     can_renew = True
@@ -633,18 +681,20 @@ async def handle_listkeys_callback(update: Update, context: ContextTypes.DEFAULT
             return
 
         for key in keys:
-            used_bytes = _effective_used_bytes(alias, key)
-            used_gb = used_bytes / BYTES_PER_GB
-            limit_gb = key.data_limit / BYTES_PER_GB if key.data_limit else "No Limit"
+            raw_used_bytes = _raw_used_bytes(key)
+            used_gb = raw_used_bytes / BYTES_PER_GB
             limit_str = f"{limit_gb:.2f} GB" if isinstance(limit_gb, float) else limit_gb
             lifecycle = queries.get_key_lifecycle(alias, str(key.key_id)) or {}
-            is_used_up = bool(key.data_limit) and used_bytes >= key.data_limit
-            if is_used_up:
-                status_tag = "🟠 [USED UP]"
-            elif key.key_id in sold_keys:
-                status_tag = "🔴 [SOLD]"
-            else:
-                status_tag = "🟢 [AVAILABLE]"
+            limit_bytes = _display_limit_bytes(key, lifecycle)
+            limit_gb = limit_bytes / BYTES_PER_GB if limit_bytes else ("Unlimited" if _is_unlimited_config(lifecycle, key) else "Not Set")
+            limit_str = f"{limit_gb:.2f} GB" if isinstance(limit_gb, float) else limit_gb
+            status_value = _status_line_for_display(str(key.key_id), sold_keys, lifecycle, raw_used_bytes, limit_bytes)
+            status_tag = {
+                "⛔ EXPIRED": "⛔ [EXPIRED]",
+                "⛔ QUOTA BLOCKED": "⛔ [QUOTA BLOCKED]",
+                "🟠 USED UP": "🟠 [USED UP]",
+                "🔴 SOLD": "🔴 [SOLD]",
+            }.get(status_value, "🟢 [AVAILABLE]")
 
             expiry_at_utc = lifecycle.get("expiry_at_utc")
             expiry_tag = "⛔ EXPIRED" if lifecycle.get("is_expired") else "✅ ACTIVE"
@@ -724,10 +774,11 @@ async def manage_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sold_keys = queries.get_sold_keys(alias)
     is_sold = str(key_id) in sold_keys
     lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
-    used_bytes = _effective_used_bytes(alias, target_key)
-    used_gb = used_bytes / BYTES_PER_GB
-    if target_key.data_limit:
-        limit_gb = target_key.data_limit / BYTES_PER_GB
+    raw_used_bytes = _raw_used_bytes(target_key)
+    used_gb = raw_used_bytes / BYTES_PER_GB
+    limit_bytes = _display_limit_bytes(target_key, lifecycle)
+    if limit_bytes:
+        limit_gb = limit_bytes / BYTES_PER_GB
         usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
     else:
         usage_line = f"{used_gb:.2f} GB / Unlimited"
@@ -952,12 +1003,14 @@ async def handle_user_manage_callback(update: Update, context: ContextTypes.DEFA
             return
 
         queries.set_key_assignment(alias, key_id, user_id)
+        lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
+        quota_bytes, is_unlimited = _assignment_sale_grant_params(lifecycle, live_key)
         queries.record_assignment_sale_grant(
             alias,
             key_id,
             user_id,
-            int(live_key.data_limit or 0),
-            is_unlimited=not bool(live_key.data_limit),
+            quota_bytes,
+            is_unlimited=is_unlimited,
             metadata={
                 "source": "manage_user_flow",
                 "assigned_by_user_id": update.effective_user.id if update.effective_user else None,
@@ -1134,15 +1187,18 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
             owner_user_id = lifecycle.get("assigned_user_id")
             owner_line = _format_user_identity_markdown(int(owner_user_id)) if owner_user_id else "*Unassigned*"
             renew_count = lifecycle.get("renew_count") or 0
-            used_bytes = _effective_used_bytes(alias, target_key)
-            used_gb = used_bytes / BYTES_PER_GB
-            if target_key.data_limit:
-                limit_gb = target_key.data_limit / BYTES_PER_GB
-                available_bytes = max(target_key.data_limit - used_bytes, 0)
+            raw_used_bytes = _raw_used_bytes(target_key)
+            used_gb = raw_used_bytes / BYTES_PER_GB
+            limit_bytes = _display_limit_bytes(target_key, lifecycle)
+            if limit_bytes:
+                limit_gb = limit_bytes / BYTES_PER_GB
+                available_bytes = 0 if _is_quota_blocked(lifecycle) else max(limit_bytes - raw_used_bytes, 0)
                 available_gb = available_bytes / BYTES_PER_GB
                 usage_line = f"Available Usage: *{available_gb:.2f} GB* (Used: {used_gb:.2f} GB / {limit_gb:.2f} GB)"
-            else:
+            elif _is_unlimited_config(lifecycle, target_key):
                 usage_line = f"Available Usage: *Unlimited* (Used: {used_gb:.2f} GB / Unlimited)"
+            else:
+                usage_line = f"Available Usage: *Not set* (Used: {used_gb:.2f} GB / Not set)"
 
             await query.message.reply_text(
                 (
@@ -1211,26 +1267,22 @@ async def handle_key_actions_callback(update: Update, context: ContextTypes.DEFA
                 clear_if_matches(context, query.message.message_id)
             return
 
-        used_bytes = _effective_used_bytes(alias, target_key)
-        used_gb = used_bytes / BYTES_PER_GB
-        if target_key.data_limit:
-            limit_gb = target_key.data_limit / BYTES_PER_GB
+        lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
+        raw_used_bytes = _raw_used_bytes(target_key)
+        used_gb = raw_used_bytes / BYTES_PER_GB
+        limit_bytes = _display_limit_bytes(target_key, lifecycle)
+        if limit_bytes:
+            limit_gb = limit_bytes / BYTES_PER_GB
             usage_line = f"{used_gb:.2f} GB / {limit_gb:.2f} GB"
-            is_used_up = used_bytes >= target_key.data_limit
-        else:
+        elif _is_unlimited_config(lifecycle, target_key):
             usage_line = f"{used_gb:.2f} GB / Unlimited"
-            is_used_up = False
+        else:
+            usage_line = f"{used_gb:.2f} GB / Not set"
 
         sold_keys = queries.get_sold_keys(alias)
-        if is_used_up:
-            status_tag = "🟠 USED UP"
-        elif str(key_id) in sold_keys:
-            status_tag = "🔴 SOLD"
-        else:
-            status_tag = "🟢 AVAILABLE"
+        status_tag = _status_line_for_display(str(key_id), sold_keys, lifecycle, raw_used_bytes, limit_bytes)
 
         keyboard = get_delete_confirmation_keyboard(alias, key_id)
-        lifecycle = queries.get_key_lifecycle(alias, str(key_id)) or {}
         expiry_at_utc = lifecycle.get("expiry_at_utc")
         expiry_text = to_yangon_display(expiry_at_utc) if expiry_at_utc else "Not set"
         owner_user_id = lifecycle.get("assigned_user_id")
@@ -1585,13 +1637,19 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
     if text in {"unlimited", "limitless", "nolimit", "no limit"}:
         quota_gb = 0.0
     else:
+        if text == "0":
+            await update.message.reply_text(
+                "⚠️ To renew as unlimited, type `unlimited` instead of `0`.",
+                parse_mode='Markdown'
+            )
+            return
         try:
             quota_gb = float(text)
             if quota_gb < 0:
                 raise ValueError
         except ValueError:
             await update.message.reply_text(
-                "⚠️ Invalid quota. Enter a non-negative number in GB, `0`, `unlimited`, or `cancel`.",
+                "⚠️ Invalid quota. Enter a positive number in GB, `unlimited`, or `cancel`.",
                 parse_mode='Markdown'
             )
             return
@@ -1624,7 +1682,7 @@ async def handle_manual_renew_quota_input(update: Update, context: ContextTypes.
         if quota_gb == 0:
             client.delete_data_limit(key_id)
         else:
-            client.add_data_limit(key_id, _quota_bytes_from_gb(quota_gb))
+            client.add_data_limit(key_id, baseline_used_bytes + _quota_bytes_from_gb(quota_gb))
 
         now_utc = utc_now_iso()
         new_expiry_utc = current_expiry_utc
@@ -1769,12 +1827,14 @@ async def handle_manual_assign_user_input(update: Update, context: ContextTypes.
             return
 
         queries.set_key_assignment(alias, key_id, target_user_id)
+        lifecycle = queries.get_key_lifecycle(alias, key_id) or {}
+        quota_bytes, is_unlimited = _assignment_sale_grant_params(lifecycle, live_key)
         queries.record_assignment_sale_grant(
             alias,
             key_id,
             target_user_id,
-            int(live_key.data_limit or 0),
-            is_unlimited=not bool(live_key.data_limit),
+            quota_bytes,
+            is_unlimited=is_unlimited,
             metadata={
                 "source": "manual_assign_flow",
                 "assigned_by_user_id": user.id,

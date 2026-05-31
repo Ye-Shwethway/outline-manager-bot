@@ -1,7 +1,7 @@
 import logging
 from datetime import time
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ApplicationHandlerStop
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ApplicationHandlerStop, ContextTypes
 from src.config import BOT_TOKEN, OWNER_ID
 from src.database.connection import init_db
 from src.database import queries
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 OWNER_ONLY_COMMANDS = {
     "addadmin",
+    "adminupdate",
     "removeadmin",
     "listadmin",
     "addserver",
@@ -50,12 +51,12 @@ ADMIN_OWNER_COMMANDS = {
 PRIVILEGED_HELP_TEXT = (
     "🛡️ *Outline Server Manager Bot Guide*\n\n"
     "*Who can use what*\n"
-    "- *Owner only:* `/addadmin`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/keyaccounting`, `/useraccounting`, `/loyalty`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
+    "- *Owner only:* `/addadmin`, `/adminupdate`, `/removeadmin`, `/listadmin`, `/addserver`, `/listserver`, `/deleteserver`, `/keyusage`, `/keyaccounting`, `/useraccounting`, `/loyalty`, `/setkeylimit`, `/restart`, `/reviewnoti`\n"
     "- *Admins + Owner:* `/keys`, `/search`, `/newkey`, `/manage`, `/renew`, `/cancel`, `/noti`, `/restart`, `/scan`, `/backup`, `/autobackup`, `/users`, `/approve`, `/reject`, `/removeuser`\n"
     "- *Everyone:* `/start`, `/help`, `/id`, `/register`, `/mykeys`\n\n"
     "*Quick start*\n"
     "1. Owner adds a server with `/addserver <alias> <api_url> <cert_sha256>`\n"
-    "2. Owner sets capacity with `/setkeylimit <alias> <max_keys>` (0 = unlimited)\n"
+    "2. Owner sets capacity with `/setkeylimit <alias> <max_keys>`\n"
     "3. Admin uses `/newkey` to create keys interactively\n"
     "4. Admin uses `/keys` to inspect keys and statuses\n"
     "5. Admin uses `/manage <alias> <key_id>` to view key URL, mark sold/unsold, or delete\n\n"
@@ -75,12 +76,13 @@ PRIVILEGED_HELP_TEXT = (
     "- `/renew` Open renew flow (choose server/key, then manual quota with optional expiry update)\n"
     "- `/cancel` Cancel active wizard\n"
     "- `/addadmin <user_id>` Add admin (owner only)\n"
+    "- `/adminupdate <text>` Broadcast an update message to all admins (owner only)\n"
     "- `/removeadmin <user_id>` Remove admin (owner only)\n"
     "- `/listadmin` List admins (owner only)\n"
     "- `/addserver <alias> <api_url> <cert_sha256>` Add Outline server (owner only)\n"
     "- `/listserver` List configured server aliases (owner only)\n"
     "- `/deleteserver <alias>` Delete server (owner only)\n"
-    "- `/keyusage` Open inline server/key picker for raw Outline usage vs tracked effective usage (owner only)\n"
+    "- `/keyusage` Open inline server/key picker for raw Outline usage and configured quota state (owner only)\n"
     "- `/keyaccounting` Open inline server/key picker for lifetime accounting totals and recent accounting events (owner only)\n"
     "- `/useraccounting` Open inline user picker for customer lifetime accounting totals and recent events (owner only)\n"
     "- `/loyalty` Open inline customer loyalty leaderboard (top buyers, consumers, renewers) (owner only)\n"
@@ -113,6 +115,7 @@ PRIVILEGED_HELP_TEXT = (
     "- `/search 1802096079`\n"
     "- `/reviewnoti off`\n"
     "- `/reviewnoti on`\n"
+    "- `/adminupdate Renew flow refined. Key accounting diagnostics are now available.`\n"
     "- `/backup`\n"
     "- `/autobackup`\n"
     "- `/manage vps1 7`\n"
@@ -157,10 +160,28 @@ async def post_init(application):
     else:
         logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
 
+    startup_message_sent = await _send_owner_startup_message(application.bot)
+    if not startup_message_sent and application.job_queue:
+        application.job_queue.run_once(
+            _retry_owner_startup_message,
+            when=15,
+            name="startup-online-retry",
+        )
+        logger.info("Scheduled one retry for the startup online message in 15 seconds.")
+
+
+async def _send_owner_startup_message(bot) -> bool:
     try:
-        await application.bot.send_message(chat_id=OWNER_ID, text="The Bot is Online")
+        await bot.send_message(chat_id=OWNER_ID, text="The Bot is Online")
+        logger.info("Startup online message sent to owner %s", OWNER_ID)
+        return True
     except Exception as e:
-        logger.warning(f"Failed to send startup online message to owner {OWNER_ID}: {e}")
+        logger.warning("Failed to send startup online message to owner %s: %s", OWNER_ID, e)
+        return False
+
+
+async def _retry_owner_startup_message(context: ContextTypes.DEFAULT_TYPE):
+    await _send_owner_startup_message(context.bot)
 
 async def start_command(update: Update, context):
     """The /start command."""
@@ -261,6 +282,7 @@ def main():
     
     # 4. Register Owner Commands
     app.add_handler(CommandHandler("addadmin", owner.add_admin))
+    app.add_handler(CommandHandler("adminupdate", owner.broadcast_admin_update))
     app.add_handler(CommandHandler("removeadmin", owner.remove_admin))
     app.add_handler(CommandHandler("listadmin", owner.list_admin))
     app.add_handler(CommandHandler("addserver", owner.add_server))

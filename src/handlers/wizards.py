@@ -93,16 +93,34 @@ async def newkey_server_selected(update: Update, context: ContextTypes.DEFAULT_T
 @admin_only
 async def newkey_ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['wizard_name'] = update.message.text
-    await update.message.reply_text("💾 Please type the **Data Limit in GB** (e.g., 50).\nType `0` for no limit.", parse_mode='Markdown')
+    await update.message.reply_text(
+        "💾 Please type the **Data Limit in GB** (e.g., 50).\nType `unlimited` for no limit.",
+        parse_mode='Markdown',
+    )
     return ASK_LIMIT
 
 @admin_only
 async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        limit_gb = float(update.message.text)
-    except ValueError:
-        await update.message.reply_text("❌ Please enter a valid number. Try again.")
-        return ASK_LIMIT
+    text = (update.message.text or "").strip().lower()
+    if text in {"unlimited", "limitless", "nolimit", "no limit"}:
+        limit_gb = 0.0
+    else:
+        if text == "0":
+            await update.message.reply_text(
+                "⚠️ To create an unlimited key, type `unlimited` instead of `0`.",
+                parse_mode='Markdown',
+            )
+            return ASK_LIMIT
+        try:
+            limit_gb = float(text)
+            if limit_gb < 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Please enter a positive GB value or type `unlimited`.",
+                parse_mode='Markdown',
+            )
+            return ASK_LIMIT
 
     alias = context.user_data['wizard_alias']
     key_name = context.user_data['wizard_name']
@@ -129,6 +147,12 @@ async def newkey_ask_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             str(new_key.key_id),
             creator_user.id if creator_user else None,
             creator_username,
+        )
+        queries.set_key_configured_limit(
+            alias,
+            str(new_key.key_id),
+            limit_bytes if limit_gb > 0 else None,
+            limit_mode="limited" if limit_gb > 0 else "unlimited",
         )
         queries.record_key_data_grant(
             alias,
