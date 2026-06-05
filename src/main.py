@@ -1,6 +1,9 @@
 import logging
 from datetime import time
+from zoneinfo import ZoneInfo
+
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ApplicationHandlerStop, ContextTypes
 from src.config import BOT_TOKEN, OWNER_ID
 from src.database.connection import init_db
@@ -13,6 +16,9 @@ from src.services.notifier import monitor_used_up_keys
 from src.handlers import owner, lists, wizards, customers
 
 logger = logging.getLogger(__name__)
+
+BOT_RUNTIME_TIMEZONE = ZoneInfo("Asia/Yangon")
+FATAL_EXIT_CODE = 1
 
 OWNER_ONLY_COMMANDS = {
     "addadmin",
@@ -154,9 +160,10 @@ async def post_init(application):
         )
         application.job_queue.run_daily(
             run_auto_backup_job,
-            time=time(hour=0, minute=0),
+            time=time(hour=0, minute=0, tzinfo=BOT_RUNTIME_TIMEZONE),
             name="daily-auto-backup",
         )
+        logger.info("Daily auto backup scheduled for 00:00 %s", BOT_RUNTIME_TIMEZONE.key)
     else:
         logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
 
@@ -182,6 +189,36 @@ async def _send_owner_startup_message(bot) -> bool:
 
 async def _retry_owner_startup_message(context: ContextTypes.DEFAULT_TYPE):
     await _send_owner_startup_message(context.bot)
+
+
+async def _send_fatal_runtime_alert(application, reason: str):
+    recipient_ids = sorted(set([OWNER_ID, *queries.get_admins()]))
+    if not recipient_ids:
+        return
+
+    text = (
+        "Bot polling stopped unexpectedly.\n\n"
+        f"Reason: {reason}\n"
+        "Action: container will exit so Docker can restart it."
+    )
+    for user_id in recipient_ids:
+        try:
+            await application.bot.send_message(chat_id=user_id, text=text)
+        except Exception as alert_err:
+            logger.warning("Failed to send fatal runtime alert to %s: %s", user_id, alert_err)
+
+
+async def _handle_fatal_polling_conflict(application, error: Conflict):
+    if application.bot_data.get("fatal_shutdown_in_progress"):
+        return
+
+    application.bot_data["fatal_shutdown_in_progress"] = True
+    application.bot_data["fatal_exit_code"] = FATAL_EXIT_CODE
+    reason = str(error)
+    logger.critical("Fatal Telegram polling conflict detected: %s", reason)
+    await _send_fatal_runtime_alert(application, reason)
+    logger.critical("Stopping application after fatal polling conflict so Docker can restart it.")
+    application.stop_running()
 
 async def start_command(update: Update, context):
     """The /start command."""
@@ -242,6 +279,10 @@ async def forbidden_command_guard(update: Update, context):
 
 async def global_error_handler(update: object, context):
     """Catch all uncaught handler errors so the bot does not fail silently."""
+    if isinstance(context.error, Conflict):
+        await _handle_fatal_polling_conflict(context.application, context.error)
+        return
+
     logger.exception("Unhandled exception while processing update", exc_info=context.error)
 
     if isinstance(update, Update):
@@ -339,6 +380,11 @@ def main():
     # 9. Start Polling
     logger.info("Bot is starting...")
     app.run_polling()
+
+    fatal_exit_code = int(app.bot_data.get("fatal_exit_code") or 0)
+    if fatal_exit_code:
+        logger.critical("Bot exited polling loop with fatal exit code %s", fatal_exit_code)
+        raise SystemExit(fatal_exit_code)
 
 if __name__ == '__main__':
     main()

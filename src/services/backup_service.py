@@ -242,7 +242,10 @@ async def run_auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
     """Daily scheduled backup generator + sender."""
     recipients = _backup_recipients()
     if not recipients:
+        logger.info("Auto backup job skipped because there are no recipients.")
         return
+
+    logger.info("Auto backup job started for %s recipients.", len(recipients))
 
     try:
         file_path = generate_backup_file("auto")
@@ -251,6 +254,7 @@ async def run_auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     caption = "🗂️ Daily auto backup file"
+    sent_count = 0
     for user_id in recipients:
         try:
             with open(file_path, "rb") as backup_file:
@@ -260,5 +264,13 @@ async def run_auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
                     filename=os.path.basename(file_path),
                     caption=caption,
                 )
+            sent_count += 1
         except Exception as send_err:
             logger.warning(f"Failed sending auto backup to {user_id}: {send_err}")
+
+    logger.info(
+        "Auto backup job completed. File: %s | Delivered: %s/%s",
+        os.path.basename(file_path),
+        sent_count,
+        len(recipients),
+    )
