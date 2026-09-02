@@ -3,14 +3,23 @@ from datetime import time
 from zoneinfo import ZoneInfo
 
 from telegram import Update
-from telegram.error import Conflict
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ApplicationHandlerStop, ContextTypes
+from telegram.error import Conflict, TimedOut, NetworkError
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ApplicationHandlerStop,
+    ContextTypes,
+)
 from src.config import BOT_TOKEN, OWNER_ID
 from src.database.connection import init_db
 from src.database import queries
 from src.services.backup_service import run_auto_backup_job
 from src.services.expiry_service import monitor_expired_keys
 from src.services.notifier import monitor_used_up_keys
+from src.services.heartbeat import write_heartbeat
 
 # Import our handlers
 from src.handlers import owner, lists, wizards, customers
@@ -19,6 +28,16 @@ logger = logging.getLogger(__name__)
 
 BOT_RUNTIME_TIMEZONE = ZoneInfo("Asia/Yangon")
 FATAL_EXIT_CODE = 1
+
+# Hardening: self-healing health pinger.
+# Periodically calls ``bot.get_me()`` over the same socket that the polling
+# loop uses. If consecutive pings time out, the polling loop is presumed
+# wedged and we trigger a graceful shutdown so Docker can respawn us.
+# NOTE: This is NOT a "kill on idle" watchdog — a quiet bot that simply
+# hasn't received messages is still healthy.
+HEALTH_PING_INTERVAL = 300        # run a getMe every 5 minutes
+HEALTH_PING_FAIL_THRESHOLD = 3    # 3 consecutive failures => restart
+HEALTH_PING_BOT_DATA_KEY = "health_ping_consecutive_failures"
 
 OWNER_ONLY_COMMANDS = {
     "addadmin",
@@ -145,6 +164,10 @@ USER_HELP_TEXT = (
 
 async def post_init(application):
     """Register periodic background jobs after application startup."""
+    # Hardening: initialise the health-ping failure counter to 0 so the
+    # very first failure is counted fairly.
+    application.bot_data[HEALTH_PING_BOT_DATA_KEY] = 0
+
     if application.job_queue:
         application.job_queue.run_repeating(
             monitor_used_up_keys,
@@ -158,12 +181,30 @@ async def post_init(application):
             first=75,
             name="expiry-auto-disable",
         )
+        application.job_queue.run_repeating(
+            _health_ping_job,
+            interval=HEALTH_PING_INTERVAL,
+            first=HEALTH_PING_INTERVAL,
+            name="health-ping",
+        )
+        application.job_queue.run_repeating(
+            _heartbeat_job,
+            interval=60,
+            first=10,
+            name="docker-heartbeat",
+        )
         application.job_queue.run_daily(
             run_auto_backup_job,
             time=time(hour=0, minute=0, tzinfo=BOT_RUNTIME_TIMEZONE),
             name="daily-auto-backup",
         )
-        logger.info("Daily auto backup scheduled for 00:00 %s", BOT_RUNTIME_TIMEZONE.key)
+        logger.info(
+            "Daily auto backup scheduled for 00:00 %s; "
+            "health-ping active (every %ss, %s consecutive failures => restart).",
+            BOT_RUNTIME_TIMEZONE.key,
+            HEALTH_PING_INTERVAL,
+            HEALTH_PING_FAIL_THRESHOLD,
+        )
     else:
         logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
 
@@ -175,6 +216,60 @@ async def post_init(application):
             name="startup-online-retry",
         )
         logger.info("Scheduled one retry for the startup online message in 15 seconds.")
+
+
+async def _health_ping_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hardening: actively probe the polling path and force restart on repeat failure.
+
+    Calls ``bot.get_me()`` over the same HTTP connection used for polling.
+    If the call succeeds, the polling loop is provably alive. If it times
+    out repeatedly, the polling loop is presumed wedged and we shut down
+    so Docker can respawn us.
+
+    This is intentionally NOT an "idle watchdog" — a quiet bot with no
+    inbound messages is still healthy and will pass the ping fine.
+    """
+    app = context.application
+    if app.bot_data.get("fatal_shutdown_in_progress"):
+        return
+
+    try:
+        await app.bot.get_me()
+    except (TimedOut, NetworkError) as exc:
+        failures = int(app.bot_data.get(HEALTH_PING_BOT_DATA_KEY, 0)) + 1
+        app.bot_data[HEALTH_PING_BOT_DATA_KEY] = failures
+        logger.warning(
+            "Health-ping failed (%s/%s): %s",
+            failures, HEALTH_PING_FAIL_THRESHOLD, exc,
+        )
+        if failures < HEALTH_PING_FAIL_THRESHOLD:
+            return
+
+        app.bot_data["fatal_shutdown_in_progress"] = True
+        app.bot_data["fatal_exit_code"] = FATAL_EXIT_CODE
+        reason = (
+            f"Health-ping failed {failures} times in a row; "
+            "polling loop is presumed wedged."
+        )
+        logger.critical("Health-ping watchdog triggered: %s", reason)
+        await _send_fatal_runtime_alert(app, reason)
+        logger.critical("Stopping application on health-ping failure so Docker can restart it.")
+        app.stop_running()
+    except Exception as exc:  # noqa: BLE001 - log-and-swallow other errors
+        # Other exceptions (e.g. Forbidden if token is revoked) are logged
+        # but do NOT count toward the wedge threshold — those are config
+        # issues, not network wedges.
+        logger.warning("Health-ping encountered non-network error: %s", exc)
+    else:
+        # Success — reset the failure counter.
+        if app.bot_data.get(HEALTH_PING_BOT_DATA_KEY):
+            logger.info("Health-ping recovered; resetting failure counter.")
+        app.bot_data[HEALTH_PING_BOT_DATA_KEY] = 0
+
+
+async def _heartbeat_job(_context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hardening: refresh the Docker healthcheck heartbeat file."""
+    write_heartbeat()
 
 
 async def _send_owner_startup_message(bot) -> bool:
@@ -306,7 +401,17 @@ def main():
         logger.error(f"Accounting backfill failed during startup: {e}")
     
     # 2. Build the Application
-    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
+    # Hardening: enforce socket health-check timeouts so a stalled Telegram
+    # connection can't freeze the polling loop silently.
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(10.0)
+        .read_timeout(20.0)
+        .write_timeout(20.0)
+        .post_init(post_init)
+        .build()
+    )
 
     # 3. Register Basic Commands
     app.add_handler(
@@ -379,7 +484,11 @@ def main():
 
     # 9. Start Polling
     logger.info("Bot is starting...")
-    app.run_polling()
+    app.run_polling(
+        # Hardening: drop any backlog from a previous (possibly crashed)
+        # instance so we never block on stale updates forever.
+        drop_pending_updates=True,
+    )
 
     fatal_exit_code = int(app.bot_data.get("fatal_exit_code") or 0)
     if fatal_exit_code:
