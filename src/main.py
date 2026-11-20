@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import time
 from zoneinfo import ZoneInfo
 
@@ -303,8 +304,34 @@ async def _send_fatal_runtime_alert(application, reason: str):
             logger.warning("Failed to send fatal runtime alert to %s: %s", user_id, alert_err)
 
 
+# A single Telegram Conflict is usually transient: a stale long-poll from
+# this bot's own previous connection (network flap / restart overlap) can
+# still be registered server-side when a new poll starts, and Telegram then
+# terminates one of them. python-telegram-bot keeps retrying getUpdates
+# after the error callback returns, so a transient conflict heals itself
+# within seconds. Only a *sustained* burst of conflicts means a genuine
+# second instance is polling with the same token -- that is the case worth
+# an alert + exit. (Incident 2026-11-20: the only conflict in ~3 months of
+# logs took the bot down and alarmed the owner although polling was
+# healthy again immediately after the restart.)
+CONFLICT_WINDOW_SECONDS = 600
+CONFLICT_FATAL_THRESHOLD = 5
+
+
 async def _handle_fatal_polling_conflict(application, error: Conflict):
     if application.bot_data.get("fatal_shutdown_in_progress"):
+        return
+
+    now = time.monotonic()
+    events = application.bot_data.setdefault("conflict_events", [])
+    events[:] = [t for t in events if now - t < CONFLICT_WINDOW_SECONDS]
+    events.append(now)
+
+    if len(events) < CONFLICT_FATAL_THRESHOLD:
+        logger.warning(
+            "Transient Telegram polling conflict (%d in %ds window; fatal at %d): %s -- polling retries automatically.",
+            len(events), CONFLICT_WINDOW_SECONDS, CONFLICT_FATAL_THRESHOLD, error,
+        )
         return
 
     application.bot_data["fatal_shutdown_in_progress"] = True
