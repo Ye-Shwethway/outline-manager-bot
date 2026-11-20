@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import time
-from datetime import time
+from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 from telegram import Update
@@ -31,14 +32,30 @@ BOT_RUNTIME_TIMEZONE = ZoneInfo("Asia/Yangon")
 FATAL_EXIT_CODE = 1
 
 # Hardening: self-healing health pinger.
-# Periodically calls ``bot.get_me()`` over the same socket that the polling
-# loop uses. If consecutive pings time out, the polling loop is presumed
-# wedged and we trigger a graceful shutdown so Docker can respawn us.
+# Periodically calls ``bot.get_me()``. A failed ping measures the *network
+# path to Telegram*, not the polling loop directly: polling rides a
+# persistent long-poll connection with its own retries, while each ping
+# opens a fresh request. The VPS<->Telegram path stalls intermittently
+# (measured 2026-11-20: ~30% of fresh connections to api.telegram.org
+# stalled), so a few failed pings in a row are transient noise, NOT a
+# wedged loop. (Incident 2026-11-20: the old "3 consecutive failures"
+# rule restarted a healthy bot after 10 flaky minutes; its alert and the
+# post-restart startup message were delivered seconds later, and the new
+# instance kept seeing the same failures.)
+# Policy: each ping run retries the probe; a run counts as failed only
+# when every attempt fails. Alert + exit only when failed runs persist
+# across a sustained window (>= HEALTH_PING_FATAL_RUNS consecutive failed
+# runs AND >= HEALTH_PING_MIN_SPAN_SECONDS since the first failure) --
+# the signature of a genuinely wedged loop or a total outage.
 # NOTE: This is NOT a "kill on idle" watchdog — a quiet bot that simply
 # hasn't received messages is still healthy.
-HEALTH_PING_INTERVAL = 300        # run a getMe every 5 minutes
-HEALTH_PING_FAIL_THRESHOLD = 3    # 3 consecutive failures => restart
+HEALTH_PING_INTERVAL = 300             # probe getMe every 5 minutes
+HEALTH_PING_ATTEMPTS = 3               # attempts per run before it counts as failed
+HEALTH_PING_RETRY_BACKOFF = (5, 15)    # seconds between attempts within a run
+HEALTH_PING_FATAL_RUNS = 4             # consecutive failed runs required...
+HEALTH_PING_MIN_SPAN_SECONDS = 900     # ...spanning at least 15 minutes
 HEALTH_PING_BOT_DATA_KEY = "health_ping_consecutive_failures"
+HEALTH_PING_FIRST_FAILURE_KEY = "health_ping_first_failure_at"
 
 OWNER_ONLY_COMMANDS = {
     "addadmin",
@@ -165,9 +182,10 @@ USER_HELP_TEXT = (
 
 async def post_init(application):
     """Register periodic background jobs after application startup."""
-    # Hardening: initialise the health-ping failure counter to 0 so the
-    # very first failure is counted fairly.
+    # Hardening: initialise the health-ping failure state so the very
+    # first failure is counted fairly.
     application.bot_data[HEALTH_PING_BOT_DATA_KEY] = 0
+    application.bot_data[HEALTH_PING_FIRST_FAILURE_KEY] = None
 
     if application.job_queue:
         application.job_queue.run_repeating(
@@ -196,15 +214,18 @@ async def post_init(application):
         )
         application.job_queue.run_daily(
             run_auto_backup_job,
-            time=time(hour=0, minute=0, tzinfo=BOT_RUNTIME_TIMEZONE),
+            time=dt_time(hour=0, minute=0, tzinfo=BOT_RUNTIME_TIMEZONE),
             name="daily-auto-backup",
         )
         logger.info(
             "Daily auto backup scheduled for 00:00 %s; "
-            "health-ping active (every %ss, %s consecutive failures => restart).",
+            "health-ping active (every %ss, %s attempts/run, "
+            "alert+restart only after %s failed runs spanning >= %ss).",
             BOT_RUNTIME_TIMEZONE.key,
             HEALTH_PING_INTERVAL,
-            HEALTH_PING_FAIL_THRESHOLD,
+            HEALTH_PING_ATTEMPTS,
+            HEALTH_PING_FATAL_RUNS,
+            HEALTH_PING_MIN_SPAN_SECONDS,
         )
     else:
         logger.warning("Job queue is unavailable; used-up key notifications are disabled.")
@@ -220,12 +241,15 @@ async def post_init(application):
 
 
 async def _health_ping_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Hardening: actively probe the polling path and force restart on repeat failure.
+    """Hardening: probe the Telegram path; restart only on *sustained* failure.
 
-    Calls ``bot.get_me()`` over the same HTTP connection used for polling.
-    If the call succeeds, the polling loop is provably alive. If it times
-    out repeatedly, the polling loop is presumed wedged and we shut down
-    so Docker can respawn us.
+    Each run tries ``bot.get_me()`` up to HEALTH_PING_ATTEMPTS times with
+    backoff. A run counts as failed only if every attempt fails. Failed
+    runs increment a counter and stamp the episode start; alert + exit
+    only when failures persist for >= HEALTH_PING_FATAL_RUNS consecutive
+    runs spanning >= HEALTH_PING_MIN_SPAN_SECONDS — a genuinely wedged
+    loop (or a total outage) looks like that, while the intermittent
+    connection stalls this VPS sees on the Telegram path do not.
 
     This is intentionally NOT an "idle watchdog" — a quiet bot with no
     inbound messages is still healthy and will pass the ping fine.
@@ -234,38 +258,55 @@ async def _health_ping_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     if app.bot_data.get("fatal_shutdown_in_progress"):
         return
 
-    try:
-        await app.bot.get_me()
-    except (TimedOut, NetworkError) as exc:
-        failures = int(app.bot_data.get(HEALTH_PING_BOT_DATA_KEY, 0)) + 1
-        app.bot_data[HEALTH_PING_BOT_DATA_KEY] = failures
-        logger.warning(
-            "Health-ping failed (%s/%s): %s",
-            failures, HEALTH_PING_FAIL_THRESHOLD, exc,
-        )
-        if failures < HEALTH_PING_FAIL_THRESHOLD:
+    last_exc = None
+    for attempt in range(HEALTH_PING_ATTEMPTS):
+        try:
+            await app.bot.get_me()
+        except (TimedOut, NetworkError) as exc:
+            last_exc = exc
+            if attempt < HEALTH_PING_ATTEMPTS - 1:
+                await asyncio.sleep(HEALTH_PING_RETRY_BACKOFF[attempt])
+            continue
+        except Exception as exc:  # noqa: BLE001 - log-and-swallow other errors
+            # Other exceptions (e.g. Forbidden if token is revoked) are
+            # logged but do NOT count toward the wedge threshold — those
+            # are config issues, not network wedges.
+            logger.warning("Health-ping encountered non-network error: %s", exc)
             return
-
-        app.bot_data["fatal_shutdown_in_progress"] = True
-        app.bot_data["fatal_exit_code"] = FATAL_EXIT_CODE
-        reason = (
-            f"Health-ping failed {failures} times in a row; "
-            "polling loop is presumed wedged."
-        )
-        logger.critical("Health-ping watchdog triggered: %s", reason)
-        await _send_fatal_runtime_alert(app, reason)
-        logger.critical("Stopping application on health-ping failure so Docker can restart it.")
-        app.stop_running()
-    except Exception as exc:  # noqa: BLE001 - log-and-swallow other errors
-        # Other exceptions (e.g. Forbidden if token is revoked) are logged
-        # but do NOT count toward the wedge threshold — those are config
-        # issues, not network wedges.
-        logger.warning("Health-ping encountered non-network error: %s", exc)
-    else:
-        # Success — reset the failure counter.
+        # Success — reset the failure state.
         if app.bot_data.get(HEALTH_PING_BOT_DATA_KEY):
             logger.info("Health-ping recovered; resetting failure counter.")
         app.bot_data[HEALTH_PING_BOT_DATA_KEY] = 0
+        app.bot_data[HEALTH_PING_FIRST_FAILURE_KEY] = None
+        return
+
+    # Every attempt failed -> one failed run.
+    now = time.monotonic()
+    failures = int(app.bot_data.get(HEALTH_PING_BOT_DATA_KEY, 0)) + 1
+    app.bot_data[HEALTH_PING_BOT_DATA_KEY] = failures
+    first_failure_at = app.bot_data.get(HEALTH_PING_FIRST_FAILURE_KEY)
+    if first_failure_at is None:
+        first_failure_at = now
+        app.bot_data[HEALTH_PING_FIRST_FAILURE_KEY] = now
+    span = now - first_failure_at
+    logger.warning(
+        "Health-ping failed (run %s/%s, %.0f min into failure episode): %s",
+        failures, HEALTH_PING_FATAL_RUNS, span / 60, last_exc,
+    )
+    if failures < HEALTH_PING_FATAL_RUNS or span < HEALTH_PING_MIN_SPAN_SECONDS:
+        return
+
+    app.bot_data["fatal_shutdown_in_progress"] = True
+    app.bot_data["fatal_exit_code"] = FATAL_EXIT_CODE
+    reason = (
+        f"Health-ping failed {failures} checks in a row over "
+        f"{span / 60:.0f} minutes despite retries; "
+        "polling loop is presumed wedged."
+    )
+    logger.critical("Health-ping watchdog triggered: %s", reason)
+    await _send_fatal_runtime_alert(app, reason)
+    logger.critical("Stopping application on health-ping failure so Docker can restart it.")
+    app.stop_running()
 
 
 async def _heartbeat_job(_context: ContextTypes.DEFAULT_TYPE) -> None:
